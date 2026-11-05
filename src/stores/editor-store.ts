@@ -346,6 +346,9 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
                 ...(tabWithDraftState.draftStatus === undefined
                   ? {}
                   : { draftStatus: tabWithDraftState.draftStatus }),
+                ...(tabWithDraftState.finalizationId === undefined
+                  ? {}
+                  : { finalizationId: tabWithDraftState.finalizationId, finalizationPublication: tabWithDraftState.finalizationPublication }),
                 ...(tabWithDraftState.narrativeThreadView === undefined
                   ? {}
                   : {

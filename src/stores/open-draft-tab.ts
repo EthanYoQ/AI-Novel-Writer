@@ -5,7 +5,7 @@ import { useEditorStore } from './editor-store'
 
 /**
  * 从回收站恢复时实体稿没写出的定稿：会话租约与稿号 → finalizationId。
- * 普通定稿时这两项直接写在标签上；恢复时这一章的标签还没开，先记在这里，打开时交给标签，「重新写入正文」才有可重试的定稿。
+ * 普通定稿时这两项直接写在标签上；恢复时先记在这里，打开或切到这一章的标签时交给它，「重新写入正文」才有可重试的定稿。
  */
 const pendingPublications = new Map<string, string>()
 const publicationKey = (session: ProjectSessionContext, draftId: number) => `${session.leaseId}\n${draftId}`

@@ -57,7 +57,7 @@ export function restoredMessage(result: Restored, text: Text): string {
 
 function refreshAfterTrashChange(session: ProjectSessionContext): void {
   announceTrashChanged(session)
-  void useDraftStore.getState().loadAllDrafts(session.projectPath, session)
+  void settled(useDraftStore.getState().loadAllDrafts(session.projectPath, session))
   globalEventBus.emit('REFRESH_RESOURCE', { resources: ['drafts', 'fileTree', 'blueprints'], projectPath: session.projectPath, projectSession: session })
 }
 

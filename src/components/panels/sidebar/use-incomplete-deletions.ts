@@ -72,7 +72,7 @@ export function useIncompleteDeletions(projectPath: string) {
       draftId: operation.draftId,
       chapterNumber: operation.chapterNumber,
       displayName,
-      tabFilePath: formatResourceUri({ kind: 'manuscript', id: operation.draftId }),
+      tabFilePath: formatResourceUri({ kind: 'draft', id: operation.draftId }),
       surface: 'manuscript',
     }, operation.operationId)
   }
