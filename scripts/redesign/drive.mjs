@@ -471,14 +471,15 @@ export function writeConsoleLog(file, diagnostics, sessionErrors) {
 /** 本次写进产出目录的文件与留作取证的隔离目录里不能有密钥；找到就删掉那个文件，结果记下 keyScan。读不了的文件算扫描不完整，判失败。 */
 export function scanRunForSecret(results, out, outBefore, secret, remove = removePath) {
   const retained = [...new Set(results.map(result => result.isolationRoot))].filter(root => fs.existsSync(root))
-  const scan = filesContaining([...changedFiles(out, outBefore), ...retained], secret)
+  const walkProblems = []
+  const scan = filesContaining([...changedFiles(out, outBefore, walkProblems), ...retained], secret)
   // 逐个删：一个删不掉不影响其余，删不掉的只记路径与错误码（命中本身已判失败）。
   const removeFailures = []
   for (const file of scan.hits) {
     const reason = remove(file)
     if (reason) removeFailures.push({ file, reason })
   }
-  for (const result of results) result.keyScan = { scanned: scan.scanned, hits: scan.hits, unreadable: scan.unreadable, removeFailures }
+  for (const result of results) result.keyScan = { scanned: scan.scanned, hits: scan.hits, unreadable: [...walkProblems, ...scan.unreadable], removeFailures }
 }
 
 /**

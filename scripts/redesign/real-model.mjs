@@ -103,9 +103,9 @@ export function fileStamps(target) {
   return new Map(filesUnder(target).map(file => [file, stamp(file)]))
 }
 
-/** 运行后新建或改过的文件。事先就有且没动过的文件不归本次运行，不查也不删。 */
-export function changedFiles(target, before) {
-  return filesUnder(target, []).filter(file => before.get(file) !== stamp(file))
+/** 运行后新建或改过的文件。事先就有且没动过的文件不归本次运行，不查也不删。遍历不了的路径记进 problems，由调用方判扫描不完整。 */
+export function changedFiles(target, before, problems = []) {
+  return filesUnder(target, problems).filter(file => before.get(file) !== stamp(file))
 }
 
 /** 结果里出现 secret 就把它整体换成占位文字，redacted 标出来，由调用方判失败。 */

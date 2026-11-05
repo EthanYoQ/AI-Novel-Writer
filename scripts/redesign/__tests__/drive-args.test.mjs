@@ -237,3 +237,35 @@ it('会话里任一步抛错（含收尾清理），结果 JSON 照样写出、�
   assert.equal(fs.existsSync(leaked), false)
   assert.equal(stdout.join('').includes('"keyScan"'), true)
 })
+
+it('本次产出里有目录遍历不了时记进 keyScan.unreadable，退出码为失败', async () => {
+  const out = tempParent()
+  const sub = path.join(out, 'locked-dir')
+  const readdir = fs.readdirSync
+  const spy = vi.spyOn(fs, 'readdirSync').mockImplementation((target, ...rest) => {
+    if (String(target) === sub) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+    return readdir(target, ...rest)
+  })
+  const write = process.stdout.write
+  process.stdout.write = () => true
+  let exitCode
+  try {
+    exitCode = await driveSessions({
+      sessions: [['real-x', ['real-x']]],
+      options: { out, theme: 'light', scenario: 'real-x' },
+      realKey: 'sk-test-secret',
+      makeRoots: () => ({ root: path.join(out, 'no-root') }),
+      run: async (sessionName, names, options) => {
+        fs.mkdirSync(sub)
+        fs.writeFileSync(path.join(sub, 'leak.log'), 'sk-test-secret')
+        return names.map(scenario => ({ scenario, theme: options.theme, isolationRoot: path.join(out, 'no-root'), residualProcesses: [], externalWrites: [] }))
+      },
+    })
+  } finally {
+    process.stdout.write = write
+    spy.mockRestore()
+  }
+  assert.equal(exitCode, 1)
+  const [result] = JSON.parse(fs.readFileSync(path.join(out, 'real-x-light.json'), 'utf8'))
+  assert.deepEqual(result.keyScan.unreadable, [{ file: sub, reason: 'EACCES' }])
+})
