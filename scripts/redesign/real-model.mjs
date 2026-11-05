@@ -55,6 +55,26 @@ function filesUnder(target) {
   return fs.readdirSync(target).flatMap(name => filesUnder(path.join(target, name)))
 }
 
+const stamp = file => { const stat = fs.statSync(file); return `${stat.mtimeMs}:${stat.size}` }
+
+/** 目录下各文件的修改时间与大小，运行前取一次，交给 changedFiles。 */
+export function fileStamps(target) {
+  return new Map(filesUnder(target).map(file => [file, stamp(file)]))
+}
+
+/** 运行后新建或改过的文件。事先就有且没动过的文件不归本次运行，不查也不删。 */
+export function changedFiles(target, before) {
+  return filesUnder(target).filter(file => before.get(file) !== stamp(file))
+}
+
+/** 结果里出现 secret 就把它整体换成占位文字，redacted 标出来，由调用方判失败。 */
+export function redactSecret(value, secret) {
+  const text = JSON.stringify(value)
+  const escaped = JSON.stringify(secret).slice(1, -1)
+  if (!text.includes(escaped)) return { value, redacted: false }
+  return { value: JSON.parse(text.split(escaped).join('[已遮蔽]')), redacted: true }
+}
+
 /** targets（文件或目录）下逐字节含 secret 的文件。 */
 export function filesContaining(targets, secret) {
   if (!secret) throw new Error('要查找的密钥为空')
@@ -69,6 +89,7 @@ export function removeModelConfigs(canonical) {
     const name = path.basename(file)
     return name === 'models.json' || name.startsWith('.models.json.')
   })
-  for (const file of removed) fs.rmSync(file, { force: true })
+  // Windows 上文件可能被短暂占用（EBUSY、EPERM）；maxRetries 只在 recursive 为 true 时生效。
+  for (const file of removed) fs.rmSync(file, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
   return removed
 }

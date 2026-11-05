@@ -12,7 +12,8 @@ import { _electron as electron } from 'playwright'
 
 import { chooseProjectDirectoryGrant } from '../project-directory-grant.mjs'
 import { startFakeModel } from './fake-model.mjs'
-import { fetchRoute, filesContaining, REAL_KEY_ENV, REAL_ORIGIN, realModelProfiles, removeModelConfigs, summarizeModelRequests } from './real-model.mjs'
+import { changedFiles, fetchRoute, filesContaining, fileStamps, REAL_KEY_ENV, REAL_ORIGIN, realModelProfiles, redactSecret, removeModelConfigs,
+  summarizeModelRequests } from './real-model.mjs'
 import { assertNodeRunsTypeScript } from './node-version.mjs'
 import { dismissCompletionToasts, dismissStartupNotice, firstInteractiveControl, waitForShell } from './pages/shell.mjs'
 
@@ -461,6 +462,25 @@ async function dumpDom(page, base) {
 const messageOf = error => error instanceof Error ? error.message : String(error)
 
 /**
+ * 真实模式会话收尾：汇总模型请求，删掉隔离目录里的模型配置。
+ * 删除失败只记进 sessionErrors：会话照常走结果路径，隔离目录因会话不干净而保留，交给收尾的密钥扫描。
+ */
+export function finishRealSession({ shared, sessionErrors, modelLog, canonical, remove = removeModelConfigs }) {
+  const summary = summarizeModelRequests(modelLog)
+  shared.modelRequests = summary.count
+  shared.modelRequestSummary = summary
+  try { shared.removedModelConfigs = remove(canonical).length } catch (error) { sessionErrors.push(messageOf(error)) }
+}
+
+/** 本次写进产出目录的文件与留作取证的隔离目录里不能有密钥；找到就删掉那个文件，结果记下 keyScan。 */
+export function scanRunForSecret(results, out, outBefore, secret) {
+  const retained = [...new Set(results.map(result => result.isolationRoot))].filter(root => fs.existsSync(root))
+  const scan = filesContaining([...changedFiles(out, outBefore), ...retained], secret)
+  for (const file of scan.hits) fs.rmSync(file, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+  for (const result of results) result.keyScan = { scanned: scan.scanned, hits: scan.hits }
+}
+
+/**
  * 一个会话一次冷启动：先跑首个截图点的 setup，再依次 run、截图、after。隔离与进程检查按会话做，结果抄进每一项。
  * realKey 只在真实模式下有：由 installRealModels 交给应用存进隔离目录的模型配置，会话结束时连同配置文件一起删掉。
  */
@@ -561,12 +581,7 @@ async function runSession(sessionName, names, options, realKey = null) {
     if (launched) shared.quit = await quit(launched.app).catch(error => { sessionErrors.push(messageOf(error)); return null })
     await fake?.close()
     if (fake) shared.modelRequests = fake.requests.length
-    if (realKey) {
-      const summary = summarizeModelRequests(modelLog)
-      shared.modelRequests = summary.count
-      shared.modelRequestSummary = summary
-      shared.removedModelConfigs = removeModelConfigs(roots.canonical).length
-    }
+    if (realKey) finishRealSession({ shared, sessionErrors, modelLog, canonical: roots.canonical })
   }
   try {
     shared.residualProcesses = await residualProcesses(roots.userData)
@@ -601,22 +616,20 @@ async function main() {
     process.stderr.write(`--real-model 要从环境变量 ${REAL_KEY_ENV} 读密钥，当前没有\n`)
     process.exit(2)
   }
+  const outBefore = realKey ? fileStamps(options.out) : null
   for (const [sessionName, names] of sessions) {
-    for (const result of await runSession(sessionName, names, options, realKey)) {
+    for (const raw of await runSession(sessionName, names, options, realKey)) {
+      // 报错与诊断里若带出密钥，打印和写盘之前就遮掉，并判这次失败。
+      const { value: result, redacted } = realKey ? redactSecret(raw, realKey) : { value: raw, redacted: false }
+      if (redacted) result.secretRedacted = true
       results.push(result)
       process.stdout.write(`${JSON.stringify(result)}\n`)
     }
   }
   const resultFile = path.join(options.out, `${options.scenario}-${options.theme}.json`)
-  if (realKey) {
-    // 产出目录与留作取证的隔离目录里不能有密钥；找到就删掉那个文件并判失败。
-    const retained = [...new Set(results.map(result => result.isolationRoot))].filter(root => fs.existsSync(root))
-    const scan = filesContaining([options.out, ...retained], realKey)
-    for (const file of scan.hits) fs.rmSync(file, { force: true })
-    for (const result of results) result.keyScan = { scanned: scan.scanned, hits: scan.hits }
-  }
+  if (realKey) scanRunForSecret(results, options.out, outBefore, realKey)
   const failed = results.filter(result => result.error || result.residualProcesses?.length !== 0 || result.externalWrites?.length !== 0
-    || result.keyScan?.hits.length > 0)
+    || result.keyScan?.hits.length > 0 || result.secretRedacted)
   fs.writeFileSync(resultFile, JSON.stringify(results, null, 2))
   if (realKey) assert.equal(filesContaining([resultFile], realKey).hits.length, 0, '结果 JSON 不含密钥')
   process.exitCode = failed.length ? 1 : 0

@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, it } from 'vitest'
-import { fetchRoute, filesContaining, realModelProfiles, removeModelConfigs, summarizeModelRequests } from '../real-model.mjs'
+import { changedFiles, fetchRoute, filesContaining, fileStamps, realModelProfiles, redactSecret, removeModelConfigs, summarizeModelRequests } from '../real-model.mjs'
 
 const REAL = { fakePort: null, realOrigin: 'https://api.siliconflow.cn' }
 const FAKE = { fakePort: 4567, realOrigin: null }
@@ -79,4 +79,24 @@ it('请求汇总按路径计数，非 200 记为失败', () => {
   assert.equal(summary.count, 3)
   assert.deepEqual(summary.byPath['/v1/chat/completions'], { count: 2, failed: 1, maxMs: 30, totalMs: 35 })
   assert.deepEqual(summary.failures, [{ path: '/v1/chat/completions', status: 429, ms: 5 }])
+})
+
+it('结果里出现密钥时整体遮蔽并标记，没有时原样返回', () => {
+  const result = { error: 'Bearer sk-test-secret 被拒', nested: [{ log: 'x sk-test-secret y' }], ok: 1 }
+  const masked = redactSecret(result, 'sk-test-secret')
+  assert.equal(masked.redacted, true)
+  assert.equal(JSON.stringify(masked.value).includes('sk-test-secret'), false)
+  assert.equal(masked.value.ok, 1)
+  assert.deepEqual(redactSecret({ ok: 1 }, 'sk-test-secret'), { value: { ok: 1 }, redacted: false })
+})
+
+it('只列出本次运行新建或改过的文件，事先就有且没动过的不算', () => {
+  const dir = tempDir()
+  fs.writeFileSync(path.join(dir, '.env'), 'SILICONFLOW_API_KEY=sk-test-secret')
+  fs.writeFileSync(path.join(dir, 'old.json'), '{}')
+  const before = fileStamps(dir)
+  fs.writeFileSync(path.join(dir, 'old.json'), '{"changed":true}')
+  fs.mkdirSync(path.join(dir, 'shots'))
+  fs.writeFileSync(path.join(dir, 'shots', 'new.png'), 'png')
+  assert.deepEqual(changedFiles(dir, before).map(file => path.relative(dir, file)).sort(), ['old.json', path.join('shots', 'new.png')])
 })

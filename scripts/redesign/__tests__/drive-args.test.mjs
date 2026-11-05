@@ -4,7 +4,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, it, vi } from 'vitest'
 vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNIT_TEST_MUST_NOT_LAUNCH_ELECTRON') } } }))
-import { appearanceWrite, assertBuilt, captureFailure, idleMemory, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs, sessionIsClean } from '../drive.mjs'
+import { appearanceWrite, assertBuilt, captureFailure, finishRealSession, idleMemory, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs, scanRunForSecret,
+  sessionIsClean } from '../drive.mjs'
+import { fileStamps } from '../real-model.mjs'
 import { BASELINE_SESSIONS, SCENARIOS } from '../scenarios.mjs'
 
 const parents = []
@@ -145,4 +147,25 @@ it('没构建的应用根直接报错，不去启动 Electron', () => {
   fs.mkdirSync(path.join(root, 'dist-electron'))
   fs.writeFileSync(path.join(root, 'dist-electron', 'main.js'), '')
   assertBuilt(root)
+})
+
+it('真实模式删模型配置失败时记进会话错误，隔离目录留着，收尾的密钥扫描照样查到并删掉', () => {
+  const root = tempParent()
+  const config = path.join(root, 'canonical', 'generations', 'g1', 'models.json')
+  fs.mkdirSync(path.dirname(config), { recursive: true })
+  fs.writeFileSync(config, '{"apiKey":"sk-test-secret"}')
+  const shared = { isolationRoot: root }
+  const sessionErrors = []
+  finishRealSession({ shared, sessionErrors, modelLog: [{ path: '/v1/embeddings', status: 200, ms: 3 }], canonical: path.join(root, 'canonical'),
+    remove: () => { throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }) } })
+  assert.deepEqual(sessionErrors, ['EBUSY: resource busy or locked'])
+  assert.equal(shared.modelRequests, 1)
+  assert.equal(sessionIsClean({ failedAt: null, sessionErrors, residualProcesses: [], externalWrites: [] }), false)
+
+  const out = tempParent()
+  const outBefore = fileStamps(out)
+  const results = [{ ...shared, error: sessionErrors.join('\n') }]
+  scanRunForSecret(results, out, outBefore, 'sk-test-secret')
+  assert.deepEqual(results[0].keyScan.hits, [config])
+  assert.equal(fs.existsSync(config), false)
 })
