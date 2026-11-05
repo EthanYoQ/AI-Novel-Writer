@@ -187,21 +187,29 @@ export function registerGenerationController(options: {
       }
     })
   }
+  // 补写中间章时，本章及以后章节的定稿正文不能进取材，否则模型会提前写出或照抄后文。
+  const laterFinalizedDocuments = (chapterNumber: number) => new Set([...FinalizationRepository.knowledgeDocumentChapters()]
+    .filter(([, finalizedChapter]) => finalizedChapter >= chapterNumber).map(([documentId]) => documentId))
+  // 定稿后处理先导入、再登记文档身份；准备之后才登记的后文章节要在开跑前拦下。
+  const preparedDraftKnowledge = (owner: Owner, request: { operation: string; chapterNumber?: number; preparationId?: string }) => {
+    if (!request.preparationId) return undefined
+    const knowledge = owner.preparedKnowledge(request.preparationId)
+    const later = request.operation === 'chapter-draft' && request.chapterNumber !== undefined ? laterFinalizedDocuments(request.chapterNumber) : new Set<string>()
+    if (knowledge.items.some(item => later.has(item.documentId))) throw new Error('GENERATION_KNOWLEDGE_SOURCE_STALE')
+    return knowledge
+  }
   register('generation:prepare-draft-context', 1, async (owner, request) => {
     const baseline = owner.draftPreparationBinding(request)
     const session = ownerSessions.get(owner)!
     const kb = await knowledgeBaseLoader.load()
-    // 补写中间章时，本章及以后章节的定稿正文不能进取材，否则模型会提前写出或照抄后文。
-    const laterFinalizedDocuments = [...FinalizationRepository.knowledgeDocumentChapters()]
-      .filter(([, chapterNumber]) => chapterNumber >= request.chapterNumber).map(([documentId]) => documentId)
-    const knowledge = await kb.captureWritingKnowledgeSnapshot(request.query, session.projectPath, getEmbeddingConfig(), laterFinalizedDocuments)
+    const knowledge = await kb.captureWritingKnowledgeSnapshot(request.query, session.projectPath, getEmbeddingConfig(), [...laterFinalizedDocuments(request.chapterNumber)])
     return guardKnowledge(owner, knowledge, () => owner.prepareDraftContext(request, knowledge, baseline))
   })
   register('generation:begin', 1, (owner, request) => {
     if (request.operation === 'chapter-draft' && !request.preparationId) throw new Error('GENERATION_DRAFT_PREPARATION_REQUIRED')
     if (request.operation === 'chapter-draft' && !request.materialDecision) throw new Error('GENERATION_MATERIAL_DECISION_REQUIRED')
     if (request.operation !== 'chapter-draft' && request.materialDecision) throw new Error('GENERATION_MATERIAL_DECISION_INVALID')
-    return guardKnowledge(owner, request.preparationId ? owner.preparedKnowledge(request.preparationId) : undefined, () => owner.begin(request))
+    return guardKnowledge(owner, preparedDraftKnowledge(owner, request), () => owner.begin(request))
   })
   register('generation:bind-material-decision', 1, (owner, request) =>
     owner.bindMaterialDecision(request.handle, request.materialDecision))
@@ -289,7 +297,7 @@ export function registerGenerationController(options: {
     if (request.operation === 'chapter-draft' && !request.preparationId) throw new Error('GENERATION_DRAFT_PREPARATION_REQUIRED')
     if (request.operation === 'chapter-draft' && !request.materialDecision) throw new Error('GENERATION_MATERIAL_DECISION_REQUIRED')
     if (request.operation !== 'chapter-draft' && request.materialDecision) throw new Error('GENERATION_MATERIAL_DECISION_INVALID')
-    return guardKnowledge(owner, request.preparationId ? owner.preparedKnowledge(request.preparationId) : undefined, () => owner.restart(handle, request))
+    return guardKnowledge(owner, preparedDraftKnowledge(owner, request), () => owner.restart(handle, request))
   })
   register('generation:discard-candidate', 2, (owner, handle, artifactId) => owner.discardCandidate(handle, artifactId))
 }
