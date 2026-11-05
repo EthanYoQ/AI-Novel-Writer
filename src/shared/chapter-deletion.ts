@@ -42,7 +42,8 @@ export interface ChapterDeletionResult {
  * - as-history：本章已重写出新定稿，被删的各版本作为被替换的旧定稿放回版本列表；
  * - reopen-as-draft：本章没有定稿，但被删定稿的收据随作品转移而冻结，只能以它的正文开一份新草稿。
  */
-export type ChapterRestoreMode = 'into-gap' | 'as-history' | 'reopen-as-draft'
+export const CHAPTER_RESTORE_MODES = Object.freeze(['into-gap', 'as-history', 'reopen-as-draft'] as const)
+export type ChapterRestoreMode = typeof CHAPTER_RESTORE_MODES[number]
 
 /** 回收站里的一项，即一次删除带走的全部行。deletionId 等于这次删除的主收据 operationId。 */
 export interface TrashedChapter {

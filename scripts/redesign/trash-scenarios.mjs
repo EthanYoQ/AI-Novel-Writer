@@ -35,7 +35,10 @@ export const TRASH_SCENARIOS = {
     const session = await app.evaluate(() => globalThis.__driveOpened)
     assert.ok(session?.leaseId, '记下了界面打开作品的会话')
     const call = (channel, ...args) => invoke(page, channel, ...args, projectPath, session)
-    const knowledge = async () => (await call('kb:list-documents')).filter(document => document.finalizedChapter === 3 || /第3章/u.test(document.fileName))
+    // 删除后 finalizedChapter 不再标出被删章，除了文件名再按定稿时记下的文档 ID 认，免得改了名的残留文档漏网。
+    const tracked = new Set()
+    const ofChapter = document => document.finalizedChapter === 3 || /第3章/u.test(document.fileName) || tracked.has(document.id)
+    const knowledge = async () => (await call('kb:list-documents')).filter(ofChapter)
     const finalized = async () => (await call('db:draft-list', 3)).find(draft => draft.status === 'finalized')
     const observed = { steps: [] }
     const step = (name, value) => { observed.steps.push({ name, ...value }); console.log(`[trash] ${name} ${JSON.stringify(value)}`) }
@@ -43,6 +46,7 @@ export const TRASH_SCENARIOS = {
     const draft = await finalized()
     assert.ok(draft, '第 3 章已定稿')
     const before = { manuscripts: manuscripts(projectPath, 3), knowledge: (await knowledge()).map(document => document.id) }
+    for (const id of before.knowledge) tracked.add(id)
     step('定稿后', before)
     assert.equal(before.manuscripts.length, 1, '定稿后有一份实体稿')
     assert.equal(before.knowledge.length, 1, '定稿后知识库有这一章')
@@ -86,7 +90,7 @@ export const TRASH_SCENARIOS = {
       trash: await invoke(context.page, 'chapter:trash-list', projectPath, reopened),
       manuscripts: manuscripts(projectPath, 3),
       knowledge: (await invoke(context.page, 'kb:list-documents', projectPath, reopened))
-        .filter(document => document.finalizedChapter === 3 || /第3章/u.test(document.fileName)),
+        .filter(ofChapter),
       incomplete: await invoke(context.page, 'chapter:list-incomplete-deletions', projectPath, reopened),
     }
     step('重新打开', after)

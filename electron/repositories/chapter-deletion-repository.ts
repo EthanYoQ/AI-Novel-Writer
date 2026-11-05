@@ -502,7 +502,8 @@ export class ChapterDeletionRepository {
       const chapterNumber = entry.chapterNumber
 
       if (entry.restoreMode === 'reopen-as-draft') {
-        const body = db.prepare('SELECT body FROM contents WHERE id = ?').pluck().get(primary.content_id) as string
+        const body = db.prepare('SELECT body FROM contents WHERE id = ?').pluck().get(primary.content_id) as string | undefined
+        if (body === undefined) throw new Error('CHAPTER_TRASH_ENTRY_INVALID')
         const existing = db.prepare(`
           SELECT d.id FROM drafts d JOIN contents c ON c.id = d.content_id
           WHERE d.chapter_number = ? AND d.status IN (${WORKING_DRAFT_STATUS_SQL}) AND c.body = ?
@@ -573,6 +574,15 @@ export class ChapterDeletionRepository {
       SELECT * FROM chapter_deletion_operations WHERE draft_id = ?
     `).get(draftId) as ChapterDeletionRow | undefined
     return row ? rowToOperation(row) : null
+  }
+
+  /** 实体稿还没清理完的删除收据（含旧版本收据）占着的文件名，小写。 */
+  static reservedManuscriptTargets(): Set<string> {
+    const names = requireDatabase().prepare(`
+      SELECT target_file_name FROM chapter_deletion_operations
+      WHERE manuscript_status IN ('pending', 'failed') AND target_file_name <> ''
+    `).pluck().all() as string[]
+    return new Set(names.map(name => name.toLowerCase()))
   }
 
   static listIncomplete(): ChapterDeletionOperation[] {

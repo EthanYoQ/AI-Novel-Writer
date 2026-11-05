@@ -191,6 +191,31 @@ describe('恢复', () => {
     expect(FinalizationRepository.getByDraftId(current)).toMatchObject({ publicationStatus: 'pending' })
   })
 
+  it('原目标被另一次没清理完的删除占着：即使内容相同也换目标，续跑那次清理删不到放回的这份', async () => {
+    const body = '第二章：沉船。'
+    const first = write(2, body)
+    const firstRecord = finalize(first, 'kb-2')
+    await service().service.delete(projectRoot, { draftId: first, chapterNumber: 2 })
+    const second = write(2, body)
+    const secondRecord = finalize(second, 'kb-2')
+    expect(secondRecord.targetFileName).toBe(firstRecord.targetFileName)
+    const shared = path.join(projectRoot, secondRecord.targetFileName)
+    fs.writeFileSync(shared, serializeManuscript({ chapterNumber: 2, chapterTitle: '沉船', content: body }), 'utf8')
+    const busy = new ChapterDeletionService({
+      cleaner: { async removeManuscript() { throw new Error('EBUSY') }, async removeKnowledgeDocument() {} },
+      createOperationId: () => 'delete-second',
+      finalizations: { retry: vi.fn() },
+    })
+    expect(await busy.delete(projectRoot, { draftId: second, chapterNumber: 2 })).toMatchObject({ operation: { manuscriptStatus: 'failed' } })
+
+    const { service: s } = service()
+    await s.restore(projectRoot, 'project', { deletionId: 'delete-a', draftId: first, expectedMode: 'into-gap' })
+
+    const restoredTarget = FinalizationRepository.get(firstRecord.finalizationId)!.targetFileName
+    expect(restoredTarget).not.toBe(secondRecord.targetFileName)
+    expect(fs.existsSync(path.join(projectRoot, restoredTarget))).toBe(false)
+  })
+
   it('删除时本来就没有知识库文档：放回原位后知识库导入步骤原样不动，不标待重做', async () => {
     finalize(write(1, '第一章。'), 'kb-1')
     const draft = write(2, '第二章，从没进过知识库。')
@@ -467,6 +492,22 @@ describe('回收站列表', () => {
       damaged: [{ deletionId: 'delete-a', error: 'CHAPTER_TRASH_RECEIPT_MISSING' }] })
     expect(await s.restore(projectRoot, 'project', { deletionId: 'delete-a', draftId: ids[0]!, expectedMode: 'into-gap' }))
       .toEqual({ success: false, error: 'CHAPTER_TRASH_RECEIPT_MISSING' })
+  })
+})
+
+describe('彻底删除清理没完成的项', () => {
+  it('删除时知识库清理失败的项彻底删除后，收据仍在待续跑，重试照常删掉知识库文档', async () => {
+    const draft = write(1, '第一章：雾钟。')
+    finalize(draft, 'kb-1')
+    const { service: failing } = service({ failKnowledge: new Set(['kb-1']) })
+    expect(await failing.delete(projectRoot, { draftId: draft, chapterNumber: 1 })).toMatchObject({ operation: { knowledgeStatus: 'failed' } })
+
+    expect(await failing.purge(projectRoot, { all: true })).toMatchObject({ success: true, purged: ['delete-a'] })
+    expect(ChapterDeletionRepository.listIncomplete()).toEqual([expect.objectContaining({ operationId: 'delete-a' })])
+
+    const { service: s, removed } = service()
+    expect(await s.retry(projectRoot, 'delete-a')).toMatchObject({ success: true, operation: { status: 'completed' } })
+    expect(removed.knowledge).toEqual(['kb-1'])
   })
 })
 

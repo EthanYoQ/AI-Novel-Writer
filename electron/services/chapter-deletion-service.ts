@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto'
 import type {
   ChapterDeletionOperation,
   ChapterDeletionResult,
-  ChapterRestoreMode,
   ChapterTrashListResult,
   DeleteFinalizedChapterRequest,
   PurgeTrashRequest,
@@ -11,6 +10,7 @@ import type {
   RestoreTrashedChapterRequest,
   RestoreTrashedChapterResult,
 } from '../../src/shared/chapter-deletion'
+import { CHAPTER_RESTORE_MODES } from '../../src/shared/chapter-deletion'
 import { CHAPTER_RESTORED_REPROJECTION_PENDING } from '../../src/shared/finalization-step-error'
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
@@ -48,8 +48,6 @@ const defaultCleaner: ChapterDeletionProjectionCleaner = {
   },
 }
 
-const RESTORE_MODES: readonly ChapterRestoreMode[] = ['into-gap', 'as-history', 'reopen-as-draft']
-
 /** 每项投影各自的失败原因留在 operation 的 manuscriptError、knowledgeError 上，由删除清理提示逐项显示。 */
 function operationError(operation: ChapterDeletionOperation): string | undefined {
   return operation.status === 'failed' ? 'CHAPTER_DELETE_CLEANUP_INCOMPLETE' : undefined
@@ -75,7 +73,7 @@ const isId = (value: unknown): value is string => typeof value === 'string' && v
 
 function validRestoreRequest(request: RestoreTrashedChapterRequest): boolean {
   return typeof request === 'object' && request !== null && isId(request.deletionId) && Number.isSafeInteger(request.draftId) && request.draftId > 0
-    && RESTORE_MODES.includes(request.expectedMode)
+    && CHAPTER_RESTORE_MODES.includes(request.expectedMode)
 }
 
 function purgeTargets(request: PurgeTrashRequest): readonly string[] | 'all' | null {
@@ -207,7 +205,8 @@ export class ChapterDeletionService {
       try {
         const target = final && request.expectedMode === 'into-gap'
           ? republishTarget({ projectRoot, targetFileName: final.targetFileName, chapterNumber: final.chapterNumber,
-            chapterTitle: final.chapterTitle, content: final.contentSnapshot, finalizationId: final.finalizationId })
+            chapterTitle: final.chapterTitle, content: final.contentSnapshot, finalizationId: final.finalizationId,
+            reserved: ChapterDeletionRepository.reservedManuscriptTargets() })
           : undefined
         this.assertOwner(projectRoot)
         const db = getProjectDb()

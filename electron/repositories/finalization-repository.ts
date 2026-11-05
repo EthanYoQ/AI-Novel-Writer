@@ -502,8 +502,8 @@ export class FinalizationRepository {
       const updated = db.prepare(`
         UPDATE finalization_outbox_all
         SET publication_status = 'pending', last_error = '', published_at = NULL, target_file_name = ?, updated_at = datetime('now')
-        WHERE finalization_id = ? AND draft_id IN (SELECT id FROM drafts WHERE status = 'finalized')
-      `).run(deletion.republish.targetFileName, deletion.republish.finalizationId)
+        WHERE finalization_id = ? AND draft_id IN (SELECT id FROM drafts WHERE status = 'finalized' AND chapter_number = ?)
+      `).run(deletion.republish.targetFileName, deletion.republish.finalizationId, deletion.chapterNumber)
       if (updated.changes !== 1) throw new Error('FINALIZATION_REINSTATE_TARGET_INVALID')
     }
   }
