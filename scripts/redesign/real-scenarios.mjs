@@ -254,6 +254,12 @@ async function restartAndOpen(context) {
   if (!await stage.chapterList(context.page).isVisible()) await stage.stageButton(context.page, '正文').click()
   // 重启后界面可能落在上次的页面而没有重新打开作品；没有记下会话时用 Ctrl K 重开一次。
   if (!await context.app.evaluate(() => globalThis.__driveOpened)) await stage.openFromPalette(context.page, BOOK)
+  // 流程脊可能早于 project:open 返回就已可见：等会话记下再往下走，免得读库时还没有租约。
+  const deadline = Date.now() + 60_000
+  while (!await context.app.evaluate(() => Boolean(globalThis.__driveOpened?.leaseId))) {
+    if (Date.now() > deadline) throw new Error('重启后 60 秒内没有记下界面打开作品的会话')
+    await context.page.waitForTimeout(250)
+  }
 }
 
 const REFERENCE_NOVEL = [
