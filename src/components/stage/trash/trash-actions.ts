@@ -5,6 +5,7 @@ import { ipc } from '../../../services/ipc-client'
 import { displayedErrorMessage } from '../../../i18n/app-errors'
 import { pluralEn } from '../../../shared/plural-en'
 import { useDraftStore } from '../../../stores/draft-store'
+import { rememberPendingPublication } from '../../../stores/open-draft-tab'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { captureProjectSession, isProjectSessionCurrent } from '../../project-session-gate'
@@ -95,6 +96,9 @@ export async function restoreTrashedChapter(entry: TrashedChapter): Promise<bool
     toast.error(text(`${trashEntryName(entry, text)}没有恢复\n\n${reasonOf(result.error)}`,
       `${trashEntryName(entry, text)} was not restored\n\n${reasonOf(result.error)}`), 10000)
     return false
+  }
+  if (result.outcome === 'restored' && result.publicationStatus === 'pending') {
+    rememberPendingPublication(session, result.draftId, result.finalizationId)
   }
   const message = restoredMessage(result, text)
   if (result.outcome === 'restored' && result.publicationError) toast.warning(message, 12000)

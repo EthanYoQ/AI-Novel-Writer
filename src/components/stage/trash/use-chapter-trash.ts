@@ -13,6 +13,8 @@ export interface ChapterTrash {
   damaged: readonly DamagedTrashEntry[]
   /** 每章最近一次删除的那一项：蓝图页缺口卡只认它。 */
   byChapter: ReadonlyMap<number, TrashedChapter>
+  /** 最近一次重读失败，列表是之前读到的：之后删的章可能不在里面，列表里没有不能当作不在回收站。 */
+  stale: boolean
 }
 
 /** 通知回收站各处重读：删除、恢复、彻底删除、重试清理之后都发这一条。 */
@@ -34,16 +36,16 @@ export function useChapterTrash(): ChapterTrash | null {
       if (result.success) {
         const byChapter = new Map<number, TrashedChapter>()
         for (const entry of result.entries) if (!byChapter.has(entry.chapterNumber)) byChapter.set(entry.chapterNumber, entry)
-        trash = { entries: result.entries, damaged: result.damaged, byChapter }
+        trash = { entries: result.entries, damaged: result.damaged, byChapter, stale: false }
       }
     } catch {
       // 回收站读不到不影响写作，下次删除、恢复或重新打开作品时再读。
     }
     if (request !== sequence.current || !isProjectSessionCurrent(session)) return
-    // 读失败时保留这个作品上一次读到的列表。
+    // 读失败时保留这个作品上一次读到的列表，记为过期。
     setState(previous => ({
       session,
-      trash: trash ?? (sameProjectSessionContext(previous.session, session) ? previous.trash : null),
+      trash: trash ?? (sameProjectSessionContext(previous.session, session) && previous.trash ? { ...previous.trash, stale: true } : null),
     }))
   }, [])
 

@@ -30,7 +30,7 @@ function trashedInGap(gap: ChapterGap, trash: ChapterTrash | null): GapTrash {
     const entry = trash.byChapter.get(chapterNumber)
     if (entry) return entry
   }
-  return null
+  return trash.stale ? 'unknown' : null
 }
 
 /** 等作者确认的一步：覆盖已有蓝图、生成前的架构警告、清空全部、删除此章、清除误导入正文。 */
