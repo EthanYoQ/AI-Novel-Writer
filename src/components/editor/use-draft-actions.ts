@@ -10,6 +10,7 @@ import { actionToast, type ActionToastAction } from '../ui/ActionToast'
 import { chapterLabel } from '../../shared/chapter-label'
 import { displayedErrorMessage, englishWithReason } from '../../i18n/app-errors'
 import {
+  draftAIResourceClaims,
   finalizeResourceClaims,
   parseDraftMeta,
   type DraftMeta,
@@ -94,8 +95,11 @@ const OCCUPIED_REASON: Record<Occupier, (title: string, verbZh: string, verbEn: 
   ],
 }
 
-/** 本章被别的运行占着时，作者点了动作要立即知道：正文没动、谁占着什么、怎么办。 */
-function explainChapterOccupied(run: WorkflowRun, chapterNumber: number, action: OccupiedAction, text: Text) {
+/**
+ * 本章被别的运行占着时，作者点了动作要立即知道：正文没动、谁占着什么、怎么办。
+ * draftSaved：这次动作已经把未保存的修改写盘，就不能再说正文保持原样。
+ */
+function explainChapterOccupied(run: WorkflowRun, chapterNumber: number, action: OccupiedAction, text: Text, draftSaved: boolean) {
   const [verbZh, verbEn] = OCCUPIED_ACTION_VERB[action]
   const chapter = chapterLabel(chapterNumber, text)
   const occupier = occupierOf(run, chapterNumber)
@@ -108,8 +112,8 @@ function explainChapterOccupied(run: WorkflowRun, chapterNumber: number, action:
   actionToast.show({
     type: 'warning',
     message: text(
-      `${chapter}还不能${verbZh}\n\n正文保持原样。${reason}`,
-      `You can’t ${verbEn} ${chapter} yet\n\nThe draft is unchanged. ${reason}`,
+      `${chapter}还不能${verbZh}\n\n${draftSaved ? '' : '正文保持原样。'}${reason}`,
+      `You can’t ${verbEn} ${chapter} yet\n\n${draftSaved ? '' : 'The draft is unchanged. '}${reason}`,
     ),
     actions,
     duration: 12000,
@@ -312,7 +316,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
 
     if (targetTab.dirty) await save(body, true)
     if (!isProjectSessionCurrent(projectSession)) return null
-    return Object.freeze({ body, sourceDraft })
+    return Object.freeze({ body, sourceDraft, saved: targetTab.dirty })
   }
 
   const isFrozenAISourceCurrent = (
@@ -343,9 +347,10 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
   const explainIfOccupied = (
     definition: Pick<WorkflowDefinition, 'projectPath' | 'resourceKeys' | 'readResourceKeys'>,
     action: OccupiedAction,
+    draftSaved = false,
   ): boolean => {
     const run = useWorkflowStore.getState().getResourceConflict(definition)
-    if (run && meta) explainChapterOccupied(run, meta.chapterNumber, action, text)
+    if (run && meta) explainChapterOccupied(run, meta.chapterNumber, action, text, draftSaved)
     return Boolean(run)
   }
 
@@ -354,6 +359,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !currentProject || !meta || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     try {
+      if (explainIfOccupied({ projectPath: projectSession.projectPath, ...draftAIResourceClaims(meta.chapterNumber) }, 'refine')) return
       const source = await freezeDraftSourceForAI(projectSession)
       if (!source || !isProjectSessionCurrent(projectSession)) return
       const { createRefineOnlyWorkflow } = await import('../../services/workflows/chapter-workflow')
@@ -369,7 +375,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
         sourceDraft: source.sourceDraft,
         userRefinePrompt: userRefinePrompt.trim() || undefined,
       }, projectSession)
-      if (explainIfOccupied(definition, 'refine')) return
+      if (explainIfOccupied(definition, 'refine', source.saved)) return
       useWorkflowStore.getState().startWorkflow(definition, false)
     } catch (e) {
       if (!isProjectSessionCurrent(projectSession)) return
@@ -383,6 +389,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !currentProject || !meta || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     try {
+      if (explainIfOccupied({ projectPath: projectSession.projectPath, ...draftAIResourceClaims(meta.chapterNumber) }, 'review')) return
       const source = await freezeDraftSourceForAI(projectSession)
       if (!source || !isProjectSessionCurrent(projectSession)) return
       const { createReviewOnlyWorkflow } = await import('../../services/workflows/chapter-workflow')
@@ -398,7 +405,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
         sourceDraft: source.sourceDraft,
         reviewFocus,
       }, projectSession)
-      if (explainIfOccupied(definition, 'review')) return
+      if (explainIfOccupied(definition, 'review', source.saved)) return
       useWorkflowStore.getState().startWorkflow(definition, false)
     } catch (e) {
       if (!isProjectSessionCurrent(projectSession)) return

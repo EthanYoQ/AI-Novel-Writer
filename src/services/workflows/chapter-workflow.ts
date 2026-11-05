@@ -131,6 +131,14 @@ export function finalizeResourceClaims(chapterNumber: number): WorkflowResourceC
   }
 }
 
+/** 审稿与修稿声明的资源：只写本章，读全书设定。审稿、修稿入口保存修改之前先按它查占用。 */
+export function draftAIResourceClaims(chapterNumber: number): WorkflowResourceClaims {
+  return {
+    resourceKeys: Object.freeze([workflowResourceKey('chapter', chapterNumber)]),
+    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
+  }
+}
+
 function workflowProjectSession(
   projectPath: string,
   sourceProjectSession: ProjectSessionContext,
@@ -273,8 +281,7 @@ export function createRefineOnlyWorkflow(
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
     uiLocale,
-    resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
-    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
+    ...draftAIResourceClaims(params.chapterNumber),
     title: localize(uiLocale,
       `第 ${params.chapterNumber} 章 · 修稿`,
       `Chapter ${params.chapterNumber} · Revise`,
@@ -317,8 +324,7 @@ export function createRefineFromReviewWorkflow(
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
     uiLocale,
     ...(generationModelId ? { generationModelId } : {}),
-    resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
-    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
+    ...draftAIResourceClaims(params.chapterNumber),
     title: localize(uiLocale,
       `第 ${params.chapterNumber} 章 · 审稿修复`,
       `Chapter ${params.chapterNumber} · Apply review`,
@@ -362,8 +368,7 @@ export function createReviewOnlyWorkflow(
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
     uiLocale,
-    resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
-    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
+    ...draftAIResourceClaims(params.chapterNumber),
     title: localize(uiLocale,
       `第 ${params.chapterNumber} 章 · 审稿`,
       `Chapter ${params.chapterNumber} · Review`,
