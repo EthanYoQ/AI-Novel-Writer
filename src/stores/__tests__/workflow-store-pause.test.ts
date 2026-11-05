@@ -227,6 +227,35 @@ describe('workflow pause at a safe step boundary', () => {
       id: 'durable-cancel-run', status: 'failed',
     })
   })
+
+  it.each([
+    ['暂停中', true],
+    ['正在写一章', false],
+  ] as const)('作者在%s取消批量创作：运行记为已取消，不记为失败', async (_when, pauseFirst) => {
+    let finishStep!: () => void
+    const second = vi.fn(async () => undefined)
+    const completion = useWorkflowStore.getState().startWorkflow({
+      runId: 'cancelled-batch', type: 'batch_generate', title: '批量草稿待审 · 第 3 至 4 章', projectPath,
+      projectSession: frozenSession(),
+      steps: [
+        { name: '第 3 章', description: '', executor: async () => new Promise<void>(resolve => { finishStep = resolve }) },
+        { name: '第 4 章', description: '', executor: second },
+      ],
+    })
+    await vi.waitFor(() => expect(finishStep).toBeTypeOf('function'))
+    if (pauseFirst) {
+      useWorkflowStore.getState().pauseWorkflow('cancelled-batch')
+      finishStep()
+      await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('paused'))
+      useWorkflowStore.getState().cancelWorkflow('cancelled-batch')
+    } else {
+      useWorkflowStore.getState().cancelWorkflow('cancelled-batch')
+      finishStep()
+    }
+    await completion
+    expect(second).not.toHaveBeenCalled()
+    expect(useWorkflowStore.getState().history[0]).toMatchObject({ id: 'cancelled-batch', status: 'cancelled' })
+  })
   it('freezes the project writing language into both the run and command context', async () => {
     const project = useProjectStore.getState().currentProject!
     useProjectStore.setState({
@@ -751,7 +780,7 @@ describe('workflow pause at a safe step boundary', () => {
     expect(useWorkflowStore.getState().activeRuns).toHaveLength(0)
     expect(useWorkflowStore.getState().history[0]).toMatchObject({
       id: runId,
-      status: 'failed',
+      status: 'cancelled',
       error: '工作流已取消',
     })
     expect(completedPayloads).toHaveLength(0)

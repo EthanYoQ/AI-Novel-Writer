@@ -158,6 +158,32 @@ describe('运行侧页', () => {
     expect(host!.textContent).toContain('正在取消，等当前操作退出')
   })
 
+  it.each([
+    ['zh-CN', '已取消', /失败|未完成/],
+    ['en-US', 'Cancelled', /Failed|did not finish|not complete/i],
+  ] as const)('作者取消的运行标为已取消，不显示成失败（%s）', async (locale, label, failure) => {
+    useLocaleStore.setState({ locale })
+    const cancelled = run('4', 'cancelled', {
+      type: 'batch_generate', title: '批量草稿待审 · 第 3 至 4 章', uiLocale: locale, error: locale === 'en-US' ? 'Workflow was cancelled.' : '工作流已取消',
+      completedAt: '2026-10-12T08:20:00.000Z',
+      steps: [
+        { id: 'c3', name: '第 3 章 · 生成草稿待审', description: '', status: 'completed', logs: [], startedAt: '2026-10-12T08:10:00.000Z', completedAt: '2026-10-12T08:15:00.000Z' },
+        { id: 'c4', name: '第 4 章 · 生成草稿待审', description: '', status: 'pending', logs: [] },
+      ],
+    })
+    useWorkflowStore.setState({ history: [cancelled] })
+    await render()
+    const card = host!.querySelector('article')!
+    expect(card.querySelector('.run-card-meta')?.textContent).toContain(label)
+    expect(card.textContent).not.toMatch(failure)
+
+    await click(locale === 'en-US' ? 'History' : '历史')
+    const row = button(/批量草稿待审/)!
+    expect(row.textContent).toContain(label)
+    expect(row.textContent).not.toMatch(failure)
+    expect(row.querySelector('[data-tone="danger"]')).toBeNull()
+  })
+
   it('批量创作：运行中可暂停，请求暂停后说明本章写完后暂停，暂停后可继续', async () => {
     const pauseWorkflow = vi.fn()
     const resumeWorkflow = vi.fn()
