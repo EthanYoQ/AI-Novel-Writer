@@ -83,6 +83,16 @@ it('resolves vector hits to canonical identity and rejects stale vector text', a
   await mutate('chunks__space_1', table => table.update({ where: "id = 'chunk'", values: { text: '过时向量镜像' } }))
   await expect(captureGenerationKnowledge(input)).rejects.toThrow('VECTOR_CANONICAL_MISMATCH')
 })
+it.each([
+  ['full-text', {}],
+  ['vector', { queryVector: [1, 0], embeddingSpace: { modelFingerprint: 'synthetic', distanceMetric: 'l2' } }],
+])('fills the %s result limit from documents that are not excluded', async (_path, search) => {
+  await seed({ duplicate: true, vector: true })
+  for (const [excluded, expected] of [['doc', 'other-chunk'], ['other-doc', 'chunk']] as const) {
+    const snapshot = await captureGenerationKnowledge({ projectStorageRoot: root, query: '中文', topK: 1, ...search, excludedDocumentIds: [excluded] })
+    expect(snapshot.items.map(item => item.chunkId)).toEqual([expected])
+  }
+})
 it('rejects legacy pending inputs and does not lazily migrate them', async () => {
   fs.writeFileSync(path.join(root, 'vectors.json'), '[]'); const before = physicalHash()
   await expect(captureGenerationKnowledge({ projectStorageRoot: root, query: '中文' })).rejects.toThrow('LEGACY_PENDING')

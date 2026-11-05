@@ -97,7 +97,7 @@ async function canWriteIncrementalVectors(projectPath: string): Promise<boolean>
 
 /** One initial retrieval; later generation guards re-read identities without another embedding request. */
 export async function captureWritingKnowledgeSnapshot(query: string, projectPath: string,
-  configuration: { protocol: 'openai' | 'gemini'; model: EmbeddingModel } | null) {
+  configuration: { protocol: 'openai' | 'gemini'; model: EmbeddingModel } | null, excludedDocumentIds: readonly string[] = []) {
   await ensureMigration(projectPath)
   let queryVector: number[] | undefined
   if (configuration && hasRequiredApiKey(configuration.model) && query.trim()) {
@@ -111,11 +111,11 @@ export async function captureWritingKnowledgeSnapshot(query: string, projectPath
   const projectStorageRoot = getProjectDataRoot(projectPath)
   return withKnowledgeSourceGate(projectStorageRoot, async () => {
     try {
-      return await captureGenerationKnowledge({ projectStorageRoot, query, topK: 5, queryVector,
+      return await captureGenerationKnowledge({ projectStorageRoot, query, topK: 5, queryVector, excludedDocumentIds,
         ...(queryVector && configuration ? { embeddingSpace: embeddingSpaceFor(configuration.protocol, configuration.model) } : {}) })
     } catch (error) {
       if (!(error instanceof Error) || error.message !== 'GENERATION_KNOWLEDGE_SPACE_NOT_MATCHED') throw error
-      return captureGenerationKnowledge({ projectStorageRoot, query, topK: 5 })
+      return captureGenerationKnowledge({ projectStorageRoot, query, topK: 5, excludedDocumentIds })
     }
   })
 }

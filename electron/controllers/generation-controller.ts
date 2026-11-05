@@ -26,6 +26,7 @@ import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '..
 import { LegacyVectorMigrationBlockedError } from '../services/knowledge-base-migration-error'
 import { errorStackFrames } from '../services/error-stack-frames'
 import { readPortableCurrentAuthority } from '../services/portable-current-authority'
+import { FinalizationRepository } from '../repositories/finalization-repository'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import type { BlueprintRangeCommitReceipt } from '../repositories/blueprint-repository'
 import type { GenerationKnowledgeSnapshot } from '../../src/shared/generation-knowledge'
@@ -190,7 +191,10 @@ export function registerGenerationController(options: {
     const baseline = owner.draftPreparationBinding(request)
     const session = ownerSessions.get(owner)!
     const kb = await knowledgeBaseLoader.load()
-    const knowledge = await kb.captureWritingKnowledgeSnapshot(request.query, session.projectPath, getEmbeddingConfig())
+    // 补写中间章时，本章及以后章节的定稿正文不能进取材，否则模型会提前写出或照抄后文。
+    const laterFinalizedDocuments = [...FinalizationRepository.knowledgeDocumentChapters()]
+      .filter(([, chapterNumber]) => chapterNumber >= request.chapterNumber).map(([documentId]) => documentId)
+    const knowledge = await kb.captureWritingKnowledgeSnapshot(request.query, session.projectPath, getEmbeddingConfig(), laterFinalizedDocuments)
     return guardKnowledge(owner, knowledge, () => owner.prepareDraftContext(request, knowledge, baseline))
   })
   register('generation:begin', 1, (owner, request) => {
