@@ -330,7 +330,12 @@ export class GenerationRunRepository {
             if (!nonce || !isContentHash(requestHash))
                 fail('GENERATION_INVOCATION_INVALID');
             const run = this.get(runId), budget = this.budget(run.rootActionId);
-            if (run.status !== 'running' || budget.blockedCode)
+            // 根已被阻断时，阻断才是拒绝的原因，哪怕之后又取消了；只有取消挡住的请求才报取消码。
+            if (budget.blockedCode)
+                fail('GENERATION_DISPATCH_BLOCKED');
+            if (run.status === 'cancelled')
+                fail('GENERATION_ACTION_CANCELLED');
+            if (run.status !== 'running')
                 fail('GENERATION_DISPATCH_BLOCKED');
             if (!sameProjectEpoch(run.binding, budget.root))
                 fail('GENERATION_EPOCH_STALE');

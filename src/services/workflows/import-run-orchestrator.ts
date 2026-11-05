@@ -22,7 +22,7 @@ import type { StepCallbacks } from '../../stores/workflow-store'
 import type { FinalizedDraftImportDraftReceipt, FinalizedDraftImportReceipt } from '../../shared/finalized-draft-import'
 import { appErrorMessage, errorCodeOf, importGenerationStopMessage } from '../../i18n/app-errors'
 import { localize } from '../../i18n/core'
-import { WorkflowCancelledError } from './workflow-cancellation'
+import { isWorkflowCancellation, WorkflowCancelledError } from './workflow-cancellation'
 
 export const IMPORT_CHAPTER_PAGE_SIZE = 100
 export const IMPORT_KNOWLEDGE_BATCH_SIZE = IMPORT_RUN_KNOWLEDGE_BATCH_SIZE
@@ -317,7 +317,8 @@ export class ImportRunOrchestrator {
       }
     } catch (error) {
       if (execution.lost) throw error
-      if (cancellationRequested(context)) {
+      // 只有取消本身造成的中止才在边界记为取消；取消请求之后的真实错误照常记失败。
+      if (cancellationRequested(context) && isWorkflowCancellation(error)) {
         await context.cancellationRequest?.catch(() => undefined)
         try {
           const durableRun = await this.dependencies.getRun(runId)
@@ -329,6 +330,7 @@ export class ImportRunOrchestrator {
           execution.lost = leaseError
           throw error
         }
+        stopIfCancelled(context, run.locale)
       } else {
         // 生成开始或发送前就被预算、阻断拒绝时报错只有裸码，在这里换成导入的说明，存进运行并抛出同一句；码只进诊断日志。
         // 只改写生成阶段（global、style、blueprints）：非生成阶段抛出的码保留原报错。

@@ -150,6 +150,7 @@ export const enUS = {
   'error.importRunNotStartable': 'This import has ended and cannot continue. Choose the files again to start a new import.',
   'error.importRunNotRestartable': 'This import cannot be restarted right now; it may still be running or already finished. Reopen the import dialog to check.',
   'error.importRunAuthorRestartForbidden': 'An author-manuscript import cannot be restarted. Resume the original import to finish publishing and post-processing.',
+  'error.importRunCancelled': 'The import was cancelled.',
   'error.importRunNotCancellable': 'This import has already ended, so there is nothing to cancel.',
   'error.importRunParsingIncomplete': 'Some files have not been read yet. Choose the unfinished files again in the import dialog.',
   'error.importRunReauthorizeUnavailable': 'Unfinished files can no longer be added to this import. Choose all the files again to start a new import.',

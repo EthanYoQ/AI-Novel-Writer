@@ -1467,12 +1467,12 @@ export class ImportRunRepository {
     if (
       run.purpose !== 'reference'
       || run.stage !== 'knowledge'
-      || run.cancel_requested === 1
       || !Number.isSafeInteger(chapterNumber)
       || chapterNumber < 1
     ) {
       throw new Error('IMPORT_RUN_REFERENCE_UNBOUND')
     }
+    if (run.cancel_requested === 1) throw new Error('IMPORT_RUN_CANCELLED')
     const chapter = db().prepare(`
       SELECT source_id, source_chapter_number, title, content_fingerprint, content_size, content_snapshot
       FROM import_run_chapters

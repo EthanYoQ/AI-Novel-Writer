@@ -78,12 +78,17 @@ export class ImportGeneration {
     const slot = this.context(run).slot
     if (ImportRunRepository.getEffectReceipt(slot.runId, slot.stage, slot.batchId)) throw new Error('GENERATION_IMPORT_EFFECT_SEALED')
   }
+  /** 导入运行要停在这一阶段且仍在进行；作者已请求取消时报取消码，渲染端才能如实显示已取消。 */
+  private assertSlotRunning(slot: ImportGenerationSlot): void {
+    const state = this.db.prepare('SELECT stage,status,cancel_requested FROM import_runs WHERE id=?').get(slot.runId) as { stage: string; status: string; cancel_requested: number } | undefined
+    if (!state || state.stage !== slot.stage || state.status !== 'running') throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
+    if (state.cancel_requested) throw new Error('GENERATION_ACTION_CANCELLED')
+  }
   assertExecution(run: DurableGenerationRun, execution?: ImportRunExecutionAuthority): void {
     const slot = this.context(run).slot
     if (!execution) throw new Error('GENERATION_IMPORT_EXECUTION_REQUIRED')
     ImportRunRepository.assertExecutionAuthority(slot.runId, execution)
-    const state = this.db.prepare('SELECT stage,status,cancel_requested FROM import_runs WHERE id=?').get(slot.runId) as { stage: string; status: string; cancel_requested: number } | undefined
-    if (!state || state.stage !== slot.stage || state.status !== 'running' || state.cancel_requested) throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
+    this.assertSlotRunning(slot)
   }
   admit(selection: BeginGenerationRequest): { existing?: DurableGenerationRun; retryOf?: DurableGenerationRun; parentRootActionId?: string; modelId?: string; chapterCount?: number } | undefined {
     const slot = selection.importSlot
@@ -104,8 +109,7 @@ export class ImportGeneration {
       if (selection.modelId !== modelOf(existing)) throw new Error('GENERATION_IMPORT_MODEL_CHANGED')
       return { existing }
     }
-    const state = this.db.prepare('SELECT stage,status,cancel_requested FROM import_runs WHERE id=?').get(slot.runId) as { stage: string; status: string; cancel_requested: number } | undefined
-    if (!state || state.stage !== slot.stage || state.status !== 'running' || state.cancel_requested) throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
+    this.assertSlotRunning(slot)
     const { totalChapters } = captureImportGenerationContext(this.db, slot)
     const key = importGenerationSlotKey(slot)
     const records = (this.db.prepare("SELECT run_id FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.importSlot.runId')=? ORDER BY rowid").all(slot.runId) as { run_id: string }[])
