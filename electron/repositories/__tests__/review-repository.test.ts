@@ -3,6 +3,7 @@ import type BetterSqlite3 from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getProjectDb } from '../../database'
+import { createLiveRowViews } from '../../../test/helpers/live-row-views'
 import { ContentRepository } from '../content-repository'
 import { ReviewRepository } from '../review-repository'
 
@@ -47,6 +48,7 @@ beforeEach(() => {
       UNIQUE(base_draft_id, review_index)
     );
   `)
+  createLiveRowViews(db)
   vi.mocked(getProjectDb).mockReturnValue(db)
   const draftContentId = ContentRepository.create('原稿')
   db.prepare('INSERT INTO drafts (content_id) VALUES (?)').run(draftContentId)

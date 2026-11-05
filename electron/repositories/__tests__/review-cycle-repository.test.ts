@@ -6,6 +6,7 @@ import type { FrozenChapterGoals } from '../../../src/shared/chapter-goal-review
 import type { ConsistencyFinding } from '../../../src/shared/consistency-preflight'
 import { buildReviewCycleRecheckReport, type ReviewCycleRecheckContext } from '../../../src/shared/review-cycle'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
+import { createLiveRowViews } from '../../../test/helpers/live-row-views'
 import { M01_GENERATION_SQL } from '../../migrations/m01-generation-runs'
 import {
   applyM03ReviewCycle,
@@ -28,7 +29,7 @@ function fixture() {
   db.pragma('foreign_keys=ON')
   db.transaction(() => {
     initializeLegacyBaselineSchema(db); db.exec(M01_GENERATION_SQL)
-    applyM03ReviewCycle(db); applyM06ReviewCycleMerge(db)
+    applyM03ReviewCycle(db); applyM06ReviewCycleMerge(db); createLiveRowViews(db)
   })()
   return db
 }

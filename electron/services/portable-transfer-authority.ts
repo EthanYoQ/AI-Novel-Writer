@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import type Database from 'better-sqlite3'
 
 import type { PortableRuntimeFreezeGuard } from './portable-runtime-freeze'
-import { PORTABLE_SOURCE_SCHEMA_VERSION } from './portable-project-format'
+import { PORTABLE_READABLE_SOURCE_SCHEMA_VERSIONS, PORTABLE_SOURCE_SCHEMA_VERSION, type PortableSourceSchemaVersion } from './portable-project-format'
 
 const HASH = /^[a-f0-9]{64}$/u
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
@@ -35,7 +35,8 @@ export interface PortableTransferAuthority {
   originProjectId: string
   targetProjectId: string | null
   snapshotGeneration: string
-  sourceSchemaVersion: 7
+  /** 收据记的是导出时的 schema 版本：v7 包导入的作品升到 v8 后原收据仍须可读（#564 M07）。 */
+  sourceSchemaVersion: PortableSourceSchemaVersion
   portableDatabaseSha256: string
   requiresRuntimeFreezeGuard: true
   finalizations: PortableFinalizationAuthority[]
@@ -118,7 +119,7 @@ export function parsePortableTransferAuthority(value: unknown): PortableTransfer
     'version', 'receiptId', 'originProjectId', 'targetProjectId', 'snapshotGeneration', 'sourceSchemaVersion',
     'portableDatabaseSha256', 'requiresRuntimeFreezeGuard', 'finalizations', 'summarySources',
   ])
-  if (source.version !== 1 || source.sourceSchemaVersion !== PORTABLE_SOURCE_SCHEMA_VERSION
+  if (source.version !== 1 || !(PORTABLE_READABLE_SOURCE_SCHEMA_VERSIONS as readonly unknown[]).includes(source.sourceSchemaVersion)
     || source.requiresRuntimeFreezeGuard !== true || !Array.isArray(source.finalizations)
     || !Array.isArray(source.summarySources) || source.finalizations.length > MAX_RECORDS
     || source.summarySources.length > MAX_RECORDS) invalid()
@@ -131,7 +132,7 @@ export function parsePortableTransferAuthority(value: unknown): PortableTransfer
     originProjectId: uuid(source.originProjectId),
     targetProjectId: source.targetProjectId === null ? null : uuid(source.targetProjectId),
     snapshotGeneration: identifier(source.snapshotGeneration),
-    sourceSchemaVersion: PORTABLE_SOURCE_SCHEMA_VERSION,
+    sourceSchemaVersion: source.sourceSchemaVersion as PortableTransferAuthority['sourceSchemaVersion'],
     portableDatabaseSha256: hash(source.portableDatabaseSha256),
     requiresRuntimeFreezeGuard: true,
     finalizations,

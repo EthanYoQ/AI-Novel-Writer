@@ -18,7 +18,7 @@ export function finalizationSlotKey(slot: FinalizationGenerationSlot): string {
 }
 export function finalizationNotesBaseline(db: Database.Database, slot: FinalizationGenerationSlot): FinalizationGenerationContext['notesBaseline'] {
   const blueprint = db.prepare('SELECT notes FROM blueprints WHERE chapter_number=?').get(slot.source.chapterNumber) as { notes: string } | undefined
-  const rows = db.prepare('SELECT chapter_number,chapter_notes,continuity_facts,source_finalization_id,source_content_hash,projection_generation FROM summary_snapshots WHERE draft_id=? ORDER BY id').all(slot.source.draftId)
+  const rows = db.prepare('SELECT chapter_number,chapter_notes,continuity_facts,source_finalization_id,source_content_hash,projection_generation FROM live_summary_snapshots WHERE draft_id=? ORDER BY id').all(slot.source.draftId)
   return { blueprint: { exists: !!blueprint, notes: blueprint?.notes ?? '' }, continuityHash: textHash(JSON.stringify(rows)) }
 }
 const immutableIdentity = (context: FinalizedCharacterContext) => ({ ...context, characters: context.characters.map(({ fields: _fields, ...identity }) => { void _fields; return identity }) })
@@ -29,7 +29,7 @@ export function captureFinalizationGenerationContext(db: Database.Database, slot
   const identity = SummaryRepository.readFinalizedCharacterContext(slot.source.draftId, frozen?.identity ?? scope, db)
   if (!isDeepStrictEqual(identity.source, slot.source)) throw new Error('GENERATION_FINALIZATION_SOURCE_CHANGED')
   if (frozen && (!isDeepStrictEqual(slot, frozen.slot) || !isDeepStrictEqual(immutableIdentity(identity), immutableIdentity(frozen.identity)))) throw new Error('GENERATION_FINALIZATION_IDENTITY_CHANGED')
-  const row = db.prepare('SELECT chapter_title FROM finalization_outbox WHERE draft_id=?').get(slot.source.draftId) as { chapter_title: string }
+  const row = db.prepare('SELECT chapter_title FROM live_finalization_outbox WHERE draft_id=?').get(slot.source.draftId) as { chapter_title: string }
   const blueprint = db.prepare('SELECT characters FROM blueprints WHERE chapter_number=?').get(slot.source.chapterNumber) as { characters: string } | undefined
   return { slot: structuredClone(slot), identity: structuredClone(frozen?.identity ?? identity), chapterTitle: row.chapter_title,
     chapterEntities: JSON.parse(blueprint?.characters ?? '[]'), writingLanguage, template: structuredClone(template),

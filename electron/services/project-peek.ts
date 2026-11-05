@@ -17,7 +17,7 @@ import type {
   ReadyProjectOverview,
 } from '../../src/shared/project-overview'
 import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../migrations/desktop-registry'
-import { verifySchema } from '../migrations/runner'
+import { migrateSchema, verifySchema } from '../migrations/runner'
 import { CURRENT_DRAFT_STATUS_SQL } from '../../src/shared/draft-status'
 import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
 
@@ -25,6 +25,8 @@ const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
 const UNAVAILABLE: ProjectOverview = Object.freeze({ state: 'unavailable' })
 const SQLITE_SUFFIXES = ['', '-wal', '-shm'] as const
+// 最近项目列表在正常打开升级之前就预览。M07（#564）之前的 schema 7 只在私有快照上迁到当前版本再统计，原库不动。
+const SNAPSHOT_UPGRADABLE_SCHEMA_VERSION = 7
 
 interface ManifestState {
   rootPath: string
@@ -204,10 +206,10 @@ function aggregateProject(
   const blueprints = chapterNumbers(database.prepare('SELECT DISTINCT chapter_number AS chapterNumber FROM blueprints').all() as { chapterNumber: number }[])
   const currentDrafts = database.prepare(`
     SELECT drafts.chapter_number AS chapterNumber, drafts.word_count AS wordCount
-    FROM drafts
+    FROM live_drafts AS drafts
     WHERE drafts.status IN (${CURRENT_DRAFT_STATUS_SQL})
       AND NOT EXISTS (
-        SELECT 1 FROM drafts newer
+        SELECT 1 FROM live_drafts newer
         WHERE newer.chapter_number=drafts.chapter_number
           AND newer.status IN (${CURRENT_DRAFT_STATUS_SQL})
           AND (newer.version>drafts.version OR newer.version=drafts.version AND newer.id>drafts.id)
@@ -216,7 +218,7 @@ function aggregateProject(
   const draftChapters = chapterNumbers(currentDrafts)
   const reviewChapters = chapterNumbers(database.prepare(`
     SELECT DISTINCT drafts.chapter_number AS chapterNumber
-    FROM reviews JOIN drafts ON drafts.id=reviews.base_draft_id
+    FROM reviews JOIN live_drafts AS drafts ON drafts.id=reviews.base_draft_id
   `).all() as { chapterNumber: number }[])
   const finalizedRows = database.prepare(`
     SELECT drafts.id AS draftId, drafts.chapter_number AS chapterNumber, drafts.version,
@@ -224,12 +226,12 @@ function aggregateProject(
            finalization_outbox.chapter_number AS outboxChapterNumber,
            finalization_outbox.content_hash AS contentHash,
            finalization_outbox.content_snapshot AS contentSnapshot
-    FROM drafts
+    FROM live_drafts AS drafts
     JOIN contents ON contents.id=drafts.content_id
-    LEFT JOIN finalization_outbox ON finalization_outbox.draft_id=drafts.id
+    LEFT JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id=drafts.id
     WHERE drafts.status='finalized'
       AND NOT EXISTS (
-        SELECT 1 FROM drafts newer
+        SELECT 1 FROM live_drafts newer
         WHERE newer.chapter_number=drafts.chapter_number AND newer.status='finalized'
           AND (newer.version>drafts.version OR newer.version=drafts.version AND newer.id>drafts.id)
       )
@@ -261,11 +263,11 @@ function aggregateProject(
   const latestDraftBody = includeExcerpt
     ? database.prepare(`
       SELECT contents.body
-      FROM drafts
+      FROM live_drafts AS drafts
       JOIN contents ON contents.id=drafts.content_id
       WHERE drafts.status IN (${CURRENT_DRAFT_STATUS_SQL})
         AND NOT EXISTS (
-          SELECT 1 FROM drafts newer
+          SELECT 1 FROM live_drafts newer
           WHERE newer.chapter_number=drafts.chapter_number
             AND newer.status IN (${CURRENT_DRAFT_STATUS_SQL})
             AND (newer.version>drafts.version OR newer.version=drafts.version AND newer.id>drafts.id)
@@ -296,6 +298,17 @@ function aggregateProject(
     plannedChapters: Math.max(0, plannedChapters),
     ...(latestDraftBody ? { excerpt: tailExcerpt(latestDraftBody) } : {}),
   })
+}
+
+/** 快照先按 v7 形态严格校验，再迁到当前版本；只写这份私有副本。 */
+function upgradeSnapshot(snapshotPath: string): void {
+  const database = new Database(snapshotPath, { fileMustExist: true })
+  try {
+    database.pragma('foreign_keys = ON')
+    const adapter = new SqliteSchemaAdapter(database)
+    verifySchema(adapter, getDesktopMigrationRegistry(), SNAPSHOT_UPGRADABLE_SCHEMA_VERSION)
+    migrateSchema(adapter, getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
+  } finally { database.close() }
 }
 
 export class ProjectPeekService {
@@ -397,6 +410,11 @@ export class ProjectPeekService {
         throw new Error('PROJECT_PEEK_SOURCE_CHANGED')
       }
       database = new Database(snapshotPath, { readonly: true, fileMustExist: true })
+      if (new SqliteSchemaAdapter(database).readUserVersion() === SNAPSHOT_UPGRADABLE_SCHEMA_VERSION) {
+        database.close()
+        upgradeSnapshot(snapshotPath)
+        database = new Database(snapshotPath, { readonly: true, fileMustExist: true })
+      }
       database.pragma('foreign_keys = ON')
       verifySchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), capability.expectedSchemaVersion)
       const physicalRevision = digest(JSON.stringify({

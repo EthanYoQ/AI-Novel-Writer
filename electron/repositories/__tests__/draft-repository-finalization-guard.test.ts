@@ -3,6 +3,7 @@ import type BetterSqlite3 from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getProjectDb } from '../../database'
+import { createLiveRowViews } from '../../../test/helpers/live-row-views'
 import { DraftRepository } from '../draft-repository'
 
 vi.mock('../../database', () => ({
@@ -41,6 +42,7 @@ beforeEach(() => {
     INSERT INTO drafts (id, chapter_number, version, status, content_id, word_count)
     VALUES (?, ?, ?, ?, ?, ?)
   `).run(1, 1, 1, 'finalized', 1, 6)
+  createLiveRowViews(db)
   vi.mocked(getProjectDb).mockReturnValue(db)
 })
 

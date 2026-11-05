@@ -85,7 +85,7 @@ export class GenerationDraftEffects {
     const usage = JSON.parse(row.usage_receipt_json), stored = usage.draftCommit as StoredDraftCommit | undefined
     if (!stored) return null
     const run = this.runs.get(row.run_id), composition = this.runs.readVisibleComposition(run.runId)
-    const draft = this.db.prepare('SELECT d.id,d.version,d.chapter_number,d.status,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(stored.id) as { id: number; version: number; chapter_number: number; status: string; body: string } | undefined
+    const draft = this.db.prepare('SELECT d.id,d.version,d.chapter_number,d.status,c.body FROM live_drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(stored.id) as { id: number; version: number; chapter_number: number; status: string; body: string } | undefined
     if (!composition || !isDraftVisibleTextVersion(composition.algorithm) || stored.success !== true
       || stored.chapterNumber !== run.binding.sourceManifest.chapterNumber
       || draft && (stored.chapterNumber !== draft.chapter_number || stored.version !== draft.version) || stored.contentHash !== textHash(stored.content) || stored.contentHash !== composition.textHash
@@ -131,9 +131,9 @@ export class GenerationDraftEffects {
       if (!saved.matchesBody) sourceConflict ??= 'GENERATION_DRAFT_RECEIPT_INVALID'
       const committed = saved.receipt
       if (committed.handle.rootActionId !== root.rootActionId) throw new Error('GENERATION_BATCH_LINEAGE_INVALID')
-      const latest = this.db.prepare('SELECT id FROM drafts WHERE chapter_number=? ORDER BY version DESC,id DESC LIMIT 1').pluck().get(committed.chapterNumber)
+      const latest = this.db.prepare('SELECT id FROM live_drafts WHERE chapter_number=? ORDER BY version DESC,id DESC LIMIT 1').pluck().get(committed.chapterNumber)
       if (latest !== committed.id || saved.draft?.status === 'superseded') sourceConflict ??= 'GENERATION_BATCH_DRAFT_REPLACED'
-      let outbox = this.db.prepare('SELECT finalization_id,content_hash,content_snapshot,chapter_number,publication_status FROM finalization_outbox WHERE draft_id=?').get(committed.id) as {
+      let outbox = this.db.prepare('SELECT finalization_id,content_hash,content_snapshot,chapter_number,publication_status FROM live_finalization_outbox WHERE draft_id=?').get(committed.id) as {
         finalization_id: string; content_hash: string; content_snapshot: string; chapter_number: number; publication_status: string
       } | undefined
       if (outbox && (outbox.content_hash !== textHash(outbox.content_snapshot) || outbox.chapter_number !== committed.chapterNumber))
@@ -162,7 +162,7 @@ export class GenerationDraftEffects {
     }
     // 审稿批次不替作者定稿；作者开始定稿其中一章即结束这一批，剩下的章另起一批（#568）。
     // 按章查：作者定稿的可能是该章更旧的草稿。批次只能写还没定稿的章，所以这里查到的定稿都在批次之后。
-    const chapterFinalized = this.db.prepare('SELECT 1 FROM finalization_outbox WHERE chapter_number=? LIMIT 1').pluck()
+    const chapterFinalized = this.db.prepare('SELECT 1 FROM live_finalization_outbox WHERE chapter_number=? LIMIT 1').pluck()
     if (intent.mode === 'draft_review' && nextChapterNumber !== null
       && completedChapters.some(chapter => chapterFinalized.get(chapter.chapterNumber))) sourceConflict ??= 'GENERATION_BATCH_FINALIZATION_CONFLICT'
     const pending = (this.db.prepare('SELECT run_id FROM generation_runs WHERE root_action_id=?').all(root.rootActionId) as { run_id: string }[])
@@ -207,12 +207,12 @@ export class GenerationDraftEffects {
       for (const ref of run.binding.sourceRefs) {
         const finalized = /^finalized:(\d+):(.+)$/.exec(ref.sourceId)
         if (!finalized) continue
-        const chapterNumber = this.db.prepare('SELECT chapter_number FROM drafts WHERE id=?').pluck().get(Number(finalized[1])) as number
+        const chapterNumber = this.db.prepare('SELECT chapter_number FROM live_drafts WHERE id=?').pluck().get(Number(finalized[1])) as number
         dependencies.push({ kind: 'finalized', draftId: Number(finalized[1]), finalizationId: finalized[2]!, chapterNumber, contentHash: ref.contentHash })
       }
       const id = DraftRepository.create({ chapterNumber: request.chapterNumber, source: 'write', content: composition.text,
         wordCount: units, sourceDependencies: dependencies }, this.db)
-      const version = this.db.prepare('SELECT version FROM drafts WHERE id=?').pluck().get(id) as number
+      const version = this.db.prepare('SELECT version FROM live_drafts WHERE id=?').pluck().get(id) as number
       const receipt: GenerationDraftCommitReceipt = { success: true, id, version, contentHash: composition.textHash, content: composition.text }
       const row = this.attempts(run.runId).find(item => item.attempt_id === artifact)!
       const usage = JSON.parse(row.usage_receipt_json)

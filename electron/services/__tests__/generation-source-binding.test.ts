@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema';
+import { createLiveRowViews } from '../../../test/helpers/live-row-views';
 import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../../migrations/desktop-registry';
 import { migrateSchema } from '../../migrations/runner';
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter';
@@ -66,7 +67,7 @@ function useCanonicalStorage(f: ReturnType<typeof fixture>) {
     fs.renameSync(f.deps.projectStorageRoot, canonical);
     f.deps.projectStorageRoot = canonical;
 }
-function fixture() {
+function fixture(migrated = false) {
     const base = path.resolve('.runtime/.cache/novel-quality-modernization/s05-sources');
     fs.mkdirSync(base, { recursive: true });
     const root = fs.mkdtempSync(path.join(base, 'binding-')), projectStorageRoot = path.join(root, 'project'), globalDataRoot = path.join(root, 'global');
@@ -74,6 +75,8 @@ function fixture() {
     fs.mkdirSync(globalDataRoot);
     const db = new Database(path.join(root, 'source.db'));
     initializeLegacyBaselineSchema(db);
+    if (migrated) migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION);
+    else createLiveRowViews(db);
     cleanups.push(() => { db.close(); fs.rmSync(root, { recursive: true, force: true }); });
     db.prepare("INSERT INTO project_core(id,project_name,global_guidance) VALUES('main','项目','作者全局指导')").run();
     db.prepare("INSERT INTO blueprints(chapter_number,title,user_guidance) VALUES(2,'第二章','章指导')").run();
@@ -90,8 +93,7 @@ describe('main rebuilt generation sources', () => {
         ['missing field provenance', '{}'],
         ['malformed provenance', '{'],
     ])('omits unproved dynamic character state without failing on %s', (_label, provenance) => {
-        const f = fixture();
-        migrateSchema(new SqliteSchemaAdapter(f.db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION);
+        const f = fixture(true);
         f.input.operation = 'chapter-draft';
         f.input.selectedDraftIds = [];
         f.db.prepare(`INSERT INTO characters(character_id,name,role,static_provenance,cs_location,cs_physical_state,cs_provenance)
@@ -106,8 +108,7 @@ describe('main rebuilt generation sources', () => {
     });
 
     it('keeps valid author, legacy and current derived state while omitting one invalid field entry', () => {
-        const f = fixture();
-        migrateSchema(new SqliteSchemaAdapter(f.db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION);
+        const f = fixture(true);
         f.input.operation = 'chapter-draft';
         f.input.selectedDraftIds = [];
         const source = { draftId: 3, finalizationId: 'final-3', chapterNumber: 1, contentHash: hash('已定稿原文') };
@@ -368,10 +369,8 @@ describe('main rebuilt generation sources', () => {
     // 回归（s10b-2）：冻结的审修上下文绝不携带会话租约，否则重开项目（新 epoch）后重建
     // binding 会以 GENERATION_REVIEW_CONTEXT_CHANGED 假失败，审稿/修稿的续跑随之被破坏。
     it('resumes a review/refine run after a reopen because the frozen review context carries no session lease', () => {
-        const f = fixture();
-        // 捕获走现代 schema（审修材料来自 contents/drafts/characters 等表），
-        // 这里只把已有的 legacy 基线库迁移到当前桌面版本。
-        migrateSchema(new SqliteSchemaAdapter(f.db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION);
+        // 捕获走现代 schema（审修材料来自 contents/drafts/characters 等表），用迁到当前桌面版本的库。
+        const f = fixture(true);
         const request: PrepareReviewRevisionRequest = { operation: 'review-chapter', draftId: 1,
             expectedDraft: { chapterNumber: 2, version: 1, status: 'draft', contentHash: textHash('原文\r\n汉字。') },
             authorInputs: [], uiLocale: 'zh-CN' };
@@ -517,8 +516,7 @@ describe('material decision receipt binding (S10B step 3)', () => {
     const decisionOf = (binding: { sourceManifest: Readonly<Record<string, unknown>> }) =>
         binding.sourceManifest.materialDecision as MaterialDecisionReceipt | undefined;
     const receiptFixture = () => {
-        const f = fixture();
-        migrateSchema(new SqliteSchemaAdapter(f.db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION);
+        const f = fixture(true);
         f.input.operation = 'chapter-draft';
         f.input.selectedDraftIds = [];
         return f;
@@ -664,8 +662,7 @@ it('accepts a legacy reviewed draft as the current working draft and still rejec
 });
 
 it('leaves a draft superseded by a newer reviewed version out of the continuity catalog (#411)', () => {
-    const f = fixture();
-    migrateSchema(new SqliteSchemaAdapter(f.db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION);
+    const f = fixture(true);
     f.db.exec("INSERT INTO blueprints(chapter_number,title,user_guidance) VALUES(3,'第三章','章指导'); INSERT INTO contents(id,body) VALUES(4,'审过的第二版'); INSERT INTO drafts(id,chapter_number,version,status,content_id) VALUES(4,2,2,'reviewed',4)");
     Object.assign(f.input, { operation: 'chapter-draft', chapterNumber: 3, selectedDraftIds: [4], selectedFinalizedDraftIds: [] });
     const before = f.build();

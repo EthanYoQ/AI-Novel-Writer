@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import type BetterSqlite3 from 'better-sqlite3'
 
 import { getProjectDb } from '../../database'
+import { createLiveRowViews } from '../../../test/helpers/live-row-views'
 import { CharacterRosterRepository } from '../character-roster-repository'
 import { ensureCharacterRosterSchema } from '../character-roster-schema'
 import { CharacterRepository } from '../character-repository'
@@ -110,6 +111,7 @@ beforeEach(() => {
     );
   `)
   ensureCharacterRosterSchema(db)
+  createLiveRowViews(db)
   vi.mocked(getProjectDb).mockReturnValue(db)
 })
 

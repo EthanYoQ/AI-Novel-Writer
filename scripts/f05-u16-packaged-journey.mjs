@@ -305,12 +305,12 @@ async function runProfile(profile, endpoint) {
         byteSize: archiveBytes.length })
       assert.deepEqual(completion.archive, manifest.archive)
       const portable = await archiveManifest(archiveBytes)
-      assert.equal(portable.sourceSchemaVersion, 7)
+      assert.equal(portable.sourceSchemaVersion, 8)
       assert.equal(portable.originProjectId, originProjectId)
       assert.equal(portable.semanticCounts['table.drafts'], 1)
       assert.equal(portable.semanticCounts['table.review_cycle_merges'], 0)
       assert(portable.entries.some(entry => entry.path === 'project.db' && entry.disposition === 'portable-database'))
-      pass('a-U16.A05', 'U16.A05', 'Writer uploaded a nonempty schema-7 archive and hash-linked immutable manifest/completion')
+      pass('a-U16.A05', 'U16.A05', 'Writer uploaded a nonempty schema-8 archive and hash-linked immutable manifest/completion')
     }
 
     currentStep = `${profile.name}:U16.A06-cloud-list`

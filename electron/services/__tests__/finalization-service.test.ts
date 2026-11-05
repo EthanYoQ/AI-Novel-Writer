@@ -6,6 +6,7 @@ import type BetterSqlite3 from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getProjectDb } from '../../database'
+import { createLiveRowViews } from '../../../test/helpers/live-row-views'
 import { FinalizationService } from '../finalization-service'
 
 vi.mock('../../database', () => ({
@@ -72,6 +73,7 @@ beforeEach(() => {
   db = new Database(':memory:')
   setupSchema()
   seedDraft()
+  createLiveRowViews(db)
   vi.mocked(getProjectDb).mockReturnValue(db)
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-finalization-service-'))
 })

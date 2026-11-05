@@ -272,7 +272,7 @@ export class RevisionRepository {
             const target = db.prepare(`
               SELECT drafts.chapter_number, drafts.version, drafts.status,
                      drafts.word_count, drafts.content_id, contents.body
-              FROM drafts
+              FROM live_drafts AS drafts
               JOIN contents ON contents.id = drafts.content_id
               WHERE drafts.id = ?
             `).get(request.targetDraftId) as {
