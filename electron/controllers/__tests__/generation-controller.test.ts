@@ -10,6 +10,7 @@ import { createHumanConfirmedReviewSnapshot, renderHumanConfirmedReviewBrief, se
 import { ipc } from '../../../src/services/ipc-client'
 import { ReviewRepository } from '../../repositories/review-repository'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
+import { DraftRepository } from '../../repositories/draft-repository'
 import { SummaryRepository } from '../../repositories/summary-repository'
 import type { ModelProfile, ProjectSessionContext, NovelConfig } from '../../../src/shared/ipc-channels'
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>
@@ -313,6 +314,32 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     const editSource = () => database.prepare('UPDATE contents SET body=? WHERE id=(SELECT content_id FROM drafts WHERE id=?)').run('作者后来改写的前章', selectedId)
     return { selectedId, prepareRequest, selectionFor, editSource }
   }
+  it('keeps finalized text of the drafted chapter and later chapters out of the writing knowledge snapshot', async () => {
+    const kb = await knowledgeBaseLoader.load()
+    const importText = (content: string, fileName: string) =>
+      kb.importText(content, fileName, session.projectPath, 'openai', { provider: '', baseUrl: '', apiKey: '' })
+    const finalize = async (chapterNumber: number, title: string, content: string) => {
+      const draftId = DraftRepository.create({ chapterNumber, source: 'write', content, wordCount: content.length })
+      const targetFileName = `第${chapterNumber}章 ${title}.txt`
+      FinalizationRepository.commit({ finalizationId: `final-${chapterNumber}`, draftId, chapterNumber, chapterTitle: title,
+        content, contentHash: textHash(content), contentRevision: 1, targetFileName })
+      const imported = await importText(content, targetFileName)
+      expect(imported.success).toBe(true)
+      FinalizationRepository.linkKnowledgeDocument(draftId, imported.docId!)
+    }
+    await finalize(1, '雾港', '沈砚在雾港听见钟楼的钟声。')
+    await finalize(2, '旧信', '沈砚读完旧信，决定夜里去钟楼。')
+    await finalize(4, '钟楼暗格', '沈砚在钟楼暗格里找到铜钥匙。')
+    await finalize(5, '军火', '钟楼下的货单写着偷运军火。')
+    expect((await importText('钟楼建于旧城北岸，共九层。', '钟楼设定.md')).success).toBe(true)
+    getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(3,'夜探')")
+
+    const preparation = await invoke('generation:prepare-draft-context', { chapterNumber: 3, modelId: model.id,
+      promptKeys: ['next_chapter_draft'], skillStages: [], authorInputs: draftInputs, query: '钟楼', selectedDraftIds: [] })
+
+    expect(preparation.knowledgeSnapshot.items.map(item => item.fileName).sort())
+      .toEqual(['第1章 雾港.txt', '第2章 旧信.txt', '钟楼设定.md'])
+  })
   it.each([new KnowledgeBaseUnavailableError(new Error('native missing')),new LegacyVectorMigrationBlockedError('untrusted details')])('preserves known knowledge failure code before drafting',async error=>{
     const fixture=await selectedSourceFixture()
     vi.spyOn(knowledgeBaseLoader,'load').mockRejectedValueOnce(error)
