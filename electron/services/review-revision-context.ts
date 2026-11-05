@@ -52,9 +52,9 @@ export function captureReviewRevisionContext(db: Database.Database, request: Pre
   if (recheckRequested && (request.operation !== 'review-chapter' || typeof request.reviewCycleId !== 'string'
     || !request.reviewCycleId.trim() || typeof request.expectedMergedHash !== 'string')) fail()
   return db.transaction((): ReviewRevisionContext => {
-    const source = db.prepare('SELECT d.id,d.chapter_number AS chapterNumber,d.version,d.status,c.body AS content FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?')
+    const source = db.prepare('SELECT d.id,d.chapter_number AS chapterNumber,d.version,d.status,c.body AS content FROM live_drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?')
       .get(request.draftId) as ExpectedDraftSource | undefined
-    const latest = source && db.prepare(`SELECT id FROM drafts WHERE chapter_number=? AND status IN (${CURRENT_DRAFT_STATUS_SQL}) ORDER BY version DESC,id DESC LIMIT 1`).pluck().get(source.chapterNumber)
+    const latest = source && db.prepare(`SELECT id FROM live_drafts WHERE chapter_number=? AND status IN (${CURRENT_DRAFT_STATUS_SQL}) ORDER BY version DESC,id DESC LIMIT 1`).pluck().get(source.chapterNumber)
     if (!source || latest !== source.id || !isDeepStrictEqual(request.expectedDraft,
       { chapterNumber: source.chapterNumber, version: source.version, status: source.status, contentHash: textHash(source.content) }))
       throw new Error('GENERATION_REVIEW_SOURCE_CHANGED')
@@ -94,7 +94,7 @@ export function captureReviewRevisionContext(db: Database.Database, request: Pre
         ({ chapterNumber, title, role, purpose, keyEvents, characters, suspenseHook, userGuidance, notes }))
     const currentBlueprint = blueprints.find(row => row.chapterNumber === source.chapterNumber)
     const projections = SummaryRepository.listFinalizedContinuityBefore(source.chapterNumber, db)
-    const rows = db.prepare("SELECT d.id,d.chapter_number,d.version,c.body,o.finalization_id,o.chapter_title,o.content_hash,o.content_snapshot FROM drafts d JOIN contents c ON c.id=d.content_id LEFT JOIN finalization_outbox o ON o.draft_id=d.id WHERE d.status='finalized' AND d.chapter_number < ? AND NOT EXISTS (SELECT 1 FROM drafts n WHERE n.chapter_number=d.chapter_number AND n.status='finalized' AND (n.version>d.version OR n.version=d.version AND n.id>d.id)) ORDER BY d.chapter_number,d.id")
+    const rows = db.prepare("SELECT d.id,d.chapter_number,d.version,c.body,o.finalization_id,o.chapter_title,o.content_hash,o.content_snapshot FROM live_drafts d JOIN contents c ON c.id=d.content_id LEFT JOIN live_finalization_outbox o ON o.draft_id=d.id WHERE d.status='finalized' AND d.chapter_number < ? AND NOT EXISTS (SELECT 1 FROM live_drafts n WHERE n.chapter_number=d.chapter_number AND n.status='finalized' AND (n.version>d.version OR n.version=d.version AND n.id>d.id)) ORDER BY d.chapter_number,d.id")
       .all(source.chapterNumber) as { id: number; chapter_number: number; version: number; body: string; finalization_id: string | null; chapter_title: string | null; content_hash: string | null; content_snapshot: string | null }[]
     const history = rows.map(row => {
       if (row.finalization_id && (row.content_hash !== textHash(row.body) || row.content_snapshot !== row.body))
@@ -112,14 +112,14 @@ export function captureReviewRevisionContext(db: Database.Database, request: Pre
         identity: materialIdentity, ...(sourceIdentity ? { source: sourceIdentity } : {}), ...(projection ? { projection } : {}) }
     })
     // The draft already records the author's selected predecessor. Never substitute a newer row.
-    const dependencies = JSON.parse(db.prepare('SELECT source_dependencies FROM drafts WHERE id=?').pluck().get(source.id) as string)
+    const dependencies = JSON.parse(db.prepare('SELECT source_dependencies FROM live_drafts WHERE id=?').pluck().get(source.id) as string)
     if (!Array.isArray(dependencies)) throw new Error('GENERATION_REVIEW_HISTORY_CHANGED')
     let predecessor: ReviewRevisionContext['predecessor']
     for (const dependency of dependencies) {
       if (dependency?.kind !== undefined && dependency.kind !== 'candidate') continue
       if (!Number.isSafeInteger(dependency?.draftId) || typeof dependency.contentHash !== 'string')
         throw new Error('GENERATION_REVIEW_HISTORY_CHANGED')
-      const row = db.prepare('SELECT d.id,d.chapter_number,d.version,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?')
+      const row = db.prepare('SELECT d.id,d.chapter_number,d.version,c.body FROM live_drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?')
         .get(dependency.draftId) as { id: number; chapter_number: number; version: number; body: string } | undefined
       if (!row || textHash(row.body) !== dependency.contentHash)
         throw new Error('GENERATION_REVIEW_HISTORY_CHANGED')

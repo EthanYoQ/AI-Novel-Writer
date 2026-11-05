@@ -207,13 +207,13 @@ async function currentProjectState(name, roots, session, source) {
     assert.equal(manifest.storageFormat, 'ai-novel')
     const db = new Database(path.join(targetRoot, '.ai-novel', 'project.db'), { readonly: true, fileMustExist: true })
     try {
-      assert.equal(db.pragma('user_version', { simple: true }), 7)
+      assert.equal(db.pragma('user_version', { simple: true }), 8)
       assert.deepEqual(db.prepare('SELECT id,project_name FROM project_core').get(), { id: 'main', project_name: source.sourceName })
     } finally { db.close() }
     assert.equal(dbBody(targetRoot), initialBody)
     assert.equal(modelCallCount(targetRoot), 0)
     assert.deepEqual(sourceFiles(source.sourceRoot), source.before)
-    pass(`${name}-schema7-import`, 'U02.A07', 'The library 导入旧项目副本 imported the schema0 project into schema7 with exact title, draft body and new copy identity; old source bytes stayed unchanged',
+    pass(`${name}-schema7-import`, 'U02.A07', 'The library 导入旧项目副本 imported the schema0 project into schema8 with exact title, draft body and new copy identity; old source bytes stayed unchanged',
       'legacy-appearance-with-project-state-to-stage')
     let body = await stage.openChapter(page, 1)
     assert.equal(await stage.proseBody(body), initialBody)
@@ -228,7 +228,7 @@ async function currentProjectState(name, roots, session, source) {
     assert.equal(dbBody(targetRoot), savedBody)
     assert.equal(modelCallCount(targetRoot), 0)
     assert.deepEqual(sourceFiles(source.sourceRoot), source.before)
-    pass(`${name}-schema7-save`, 'U02.A07', 'Ctrl S in the stage chapter editor saved the exact edited body in the imported schema7 copy without changing the old source',
+    pass(`${name}-schema7-save`, 'U02.A07', 'Ctrl S in the stage chapter editor saved the exact edited body in the imported schema8 copy without changing the old source',
       'legacy-appearance-with-project-state-to-stage')
     await session.app.close()
     session = await launch(roots)

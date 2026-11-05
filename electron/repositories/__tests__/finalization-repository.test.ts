@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { getCurrentProjectPath, getProjectDb } from '../../database'
+import { createLiveRowViews } from '../../../test/helpers/live-row-views'
 import { countDraftUnits } from '../../../src/shared/draft-units'
 import { FinalizationRepository } from '../finalization-repository'
 
@@ -75,6 +76,7 @@ beforeEach(() => {
       updated_at TEXT
     );
   `)
+  createLiveRowViews(db)
   vi.mocked(getProjectDb).mockReturnValue(db)
   vi.mocked(getCurrentProjectPath).mockReturnValue(null)
   seedDraft()

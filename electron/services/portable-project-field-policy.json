@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 7,
+  "schemaVersion": 8,
   "rules": {
     "D": ["preserve-domain", "signed-domain-value", "portable-domain-copy"],
     "H": ["historical-nonreplayable", "nonreplayable-history", "portable-history-projector"],
@@ -17,6 +17,7 @@
     "character_avatar_assets", "character_avatar_unresolved"
   ],
   "m06Tables": ["review_cycle_merges"],
+  "m07Fields": ["drafts.deletion_id", "drafts.deleted_from_status", "drafts.deleted_at"],
   "optionalFields": ["characters.avatar"],
   "deltaCharacterFields": ["character_id", "legacy_key", "static_provenance", "identity_revision", "retired"],
   "signedOverrides": {
@@ -90,7 +91,7 @@
     "consistency_exemptions": {"stable_fact_key":"D","reason":"D","revoked":"D"},
     "contents": {"id":"D","body":"D","created_at":"D"},
     "continuity_projection_meta": {"id":"D","generation":"D","stale_from_chapter":"D"},
-    "drafts": {"id":"D","chapter_number":"D","version":"D","status":"D","source":"D","content_id":"D","word_count":"D","source_dependencies":"R","created_at":"D","updated_at":"D"},
+    "drafts": {"id":"D","chapter_number":"D","version":"D","status":"D","source":"D","content_id":"D","word_count":"D","source_dependencies":"R","created_at":"D","updated_at":"D","deletion_id":"D","deleted_from_status":"D","deleted_at":"D"},
     "finalization_outbox": {"finalization_id":"D","draft_id":"D","chapter_number":"D","chapter_title":"D","content_hash":"D","content_revision":"D","content_snapshot":"D","target_file_name":"P","knowledge_document_id":"D","publication_status":"H","last_error":"R","published_at":"D","created_at":"D","updated_at":"D"},
     "finalized_draft_import_operations": {"operation_id":"D","payload_hash":"R","receipt_json":"R","created_at":"H"},
     "generation_artifacts": {"artifact_id":"H","attempt_id":"H","run_id":"H","artifact_json":"R","revision":"H","status":"H"},

@@ -7,7 +7,7 @@ import { generationOutputContract, type GenerationAuthorInput } from '../../src/
 import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunSummary, MainGenerationRunView, MainGenerationSnapshot } from '../../src/services/generation/generation-runtime'
 import type { ModelProfile, ModelExecutionLeaseReceipt, LLMFinishReason } from '../../src/shared/ipc-channels'
 import type { CreativeStrategy } from '../../src/shared/reasoning-types'
-import { TERMINAL_PROVIDER_FAILURE_CODES, tokenLiability } from '../../src/shared/generation-contract'
+import { TERMINAL_PROVIDER_FAILURE_CODES, rootBudgetExhausted, tokenLiability } from '../../src/shared/generation-contract'
 import { DRAFT_RECONCILE_PURPOSE, stripDraftReconciliationBlock, withoutDraftReconciliationArtifacts } from '../../src/shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock, stripDraftShortOutlineBlock } from '../../src/shared/draft-short-outline'
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
@@ -398,7 +398,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const binding = draftPreparationBinding(request, knowledgeSnapshot)
       if (beforeKnowledgeRead && !preparationMatches(beforeKnowledgeRead, binding, true)) throw new Error('GENERATION_DRAFT_PREPARATION_CHANGED')
       const selectedDrafts = request.selectedDraftIds.map(draftId => {
-        const row = deps.database.prepare('SELECT d.chapter_number,d.version,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(draftId) as { chapter_number: number; version: number; body: string }
+        const row = deps.database.prepare('SELECT d.chapter_number,d.version,c.body FROM live_drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(draftId) as { chapter_number: number; version: number; body: string }
         return { draftId, chapterNumber: row.chapter_number, version: row.version, contentHash: textHash(row.body), content: row.body }
       })
       return { binding, selectedDrafts }
@@ -919,7 +919,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       .filter(item => item.required && /^candidate:\d+$/u.test(item.sourceId))
       .map(item => Number(item.sourceId.slice('candidate:'.length))))
     const selectedDrafts = (manifest.selectedDraftIds as number[] ?? []).map(draftId => {
-      const row = deps.database.prepare('SELECT d.chapter_number,d.version,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(draftId) as { chapter_number: number; version: number; body: string } | undefined
+      const row = deps.database.prepare('SELECT d.chapter_number,d.version,c.body FROM live_drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(draftId) as { chapter_number: number; version: number; body: string } | undefined
       const ref = run.binding.sourceRefs.find(source => source.sourceId === `draft:${draftId}`)
       return row && ref && row.version === ref.revision && textHash(row.body) === ref.contentHash
         ? { draftId, chapterNumber: row.chapter_number, version: row.version, contentHash: ref.contentHash, content: row.body,
@@ -1259,10 +1259,6 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const explicitRetry = prior !== undefined && request.retryRunId === prior.runId
       const authorRetry = explicitRetry && finalizationRetriesWithNewRun(prior)
       if (prior && !authorRetry && !finalizations.retryable(prior)) return finalizationRecovery(prior)
-      // 根已被阻断或用完时间预算时，新运行也发不出请求，直接报出原因。
-      const priorBudget = authorRetry ? repository.budget(prior.rootActionId) : undefined
-      const blockedCode = priorBudget && (priorBudget.blockedCode ?? (priorBudget.activeElapsedMs >= priorBudget.policy.maxActiveElapsedMs ? 'ROOT_BUDGET_EXHAUSTED' : null))
-      if (blockedCode) throw new Error(blockedCode)
       const sibling = finalizations.find({ source: slot.source, stepKey: slot.stepKey === 'chapter_notes' ? 'character_cards' : 'chapter_notes' })
       const predecessor = prior ?? sibling
       let parentRootActionId = predecessor && repository.budget(predecessor.rootActionId).root.status !== 'cancelled' ? predecessor.rootActionId : undefined
@@ -1277,6 +1273,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         if (!committed || committed.receipt?.contentHash !== slot.source.contentHash) throw new Error('GENERATION_FINALIZATION_PARENT_INVALID')
         parentRootActionId = root.rootActionId; selectedModelId = modelReceipt(committed.run.binding).modelId
       }
+      // 只查新运行要加入的根（已取消的根不会被加入）：它已阻断或预算用完时新运行也发不出请求，直接报原因，不留空运行。
+      const target = authorRetry && parentRootActionId ? repository.budget(parentRootActionId) : undefined
+      const blockedCode = target && (target.blockedCode ?? (rootBudgetExhausted(target.policy, target.attempts, target.activeElapsedMs) ? 'ROOT_BUDGET_EXHAUSTED' : null))
+      if (blockedCode) throw new Error(blockedCode)
       if (sibling && !finalizations.readEffect(sibling)) throw new Error('GENERATION_FINALIZATION_PREDECESSOR_REQUIRED')
       const prepared = finalizedCharacters.readContext(slot.source.draftId)
       if (!isDeepStrictEqual(prepared.context.source, slot.source)) throw new Error('GENERATION_FINALIZATION_SOURCE_CHANGED')

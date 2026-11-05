@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema';
+import { createLiveRowViews } from '../../../test/helpers/live-row-views';
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding, compareGenerationSourceBindings, type GenerationSourceBindingInput } from '../generation-source-binding';
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3');
 const cleanups: (() => void)[] = [];
@@ -20,7 +21,7 @@ function fixture() {
     fs.mkdirSync(projectStorageRoot);
     fs.mkdirSync(globalDataRoot);
     const db = new Database(path.join(root, 'source.db'));
-    initializeLegacyBaselineSchema(db);
+    initializeLegacyBaselineSchema(db); createLiveRowViews(db);
     cleanups.push(() => { db.close(); fs.rmSync(root, { recursive: true, force: true }); });
     db.prepare("INSERT INTO project_core(id,project_name,global_guidance) VALUES('main','项目','作者全局指导')").run();
     db.prepare("INSERT INTO blueprints(chapter_number,title,user_guidance) VALUES(2,'第二章','章指导')").run();

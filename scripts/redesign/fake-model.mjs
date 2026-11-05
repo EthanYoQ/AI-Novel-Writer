@@ -191,6 +191,32 @@ export async function startFakeModel(diagnostics) {
       response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ data: FIXTURE_ENDPOINT_MODELS.map(id => ({ id })) }))
       return
     }
+    if (request.method === 'POST' && request.url.endsWith('/v1/messages')) {
+      if (request.headers['x-api-key'] !== FAKE_MODEL.apiKey) { response.writeHead(401).end(); return }
+      const body = JSON.parse(Buffer.concat(await Array.fromAsync(request)).toString('utf8'))
+      await pass()
+      const prompt = [body.system ?? '', ...(body.messages ?? []).map(message => message.content)].join('\n')
+      const { kind, content } = responseFor(prompt, { extraction, plotTree, review, characterState, importInference })
+      chats.push({ kind, model: body.model, messages: body.messages, protocol: 'anthropic',
+        anthropicVersion: request.headers['anthropic-version'] ?? null, system: body.system ?? null, maxTokens: body.max_tokens, stream: body.stream === true })
+      record(kind, `anthropic ${prompt.slice(0, 100).replace(/\s+/g, ' ')}`)
+      const usage = { input_tokens: 400, output_tokens: 200 }
+      if (body.stream !== true) {
+        response.writeHead(200, { 'Content-Type': 'application/json' })
+          .end(JSON.stringify({ content: [{ type: 'text', text: content }], stop_reason: 'end_turn', usage }))
+        return
+      }
+      const event = (type, payload = {}) => `event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`
+      const half = Math.ceil(content.length / 2)
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      response.write(event('message_start', { message: { usage: { input_tokens: usage.input_tokens, output_tokens: 1 } } }))
+      for (const text of [content.slice(0, half), content.slice(half)].filter(Boolean)) {
+        response.write(event('content_block_delta', { index: 0, delta: { type: 'text_delta', text } }))
+      }
+      response.write(event('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: usage.output_tokens } }))
+      response.end(event('message_stop'))
+      return
+    }
     const keyless = keylessEmbeddings && request.url === '/v1/embeddings' && !(request.headers.authorization ?? '').replace(/^Bearer\s*/u, '')
     if (request.method !== 'POST' || (request.headers.authorization !== `Bearer ${FAKE_MODEL.apiKey}` && !keyless)) {
       response.writeHead(403).end(); return

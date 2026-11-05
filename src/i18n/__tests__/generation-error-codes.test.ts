@@ -536,6 +536,8 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'CHAPTER_DELETE_RECEIPT_CORRUPT',
     'CHAPTER_DELETE_REQUEST_MISMATCH',
     'CHAPTER_DELETE_TARGET_MISMATCH',
+    // #564 M07：drafts 删除三列与 deleted 状态不同进退时触发器拒写。只有删除事务写这三列，碰到说明代码缺陷。
+    'DRAFT_DELETION_SHAPE_INVALID',
     'CHAPTER_REOPEN_REQUEST_INVALID',
     // #474 B5：定稿快照的形状、会话与哈希，定稿收据与发布记录、导出快照的一致性，实体稿目标路径的边界。
     // 界面从冻结的编辑器快照与库内收据构造这些请求；碰到说明代码缺陷或作品库、正文文件夹被外部改坏。

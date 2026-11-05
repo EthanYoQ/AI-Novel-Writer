@@ -5,7 +5,8 @@ import { assertKnowledgeSourceIdle, withKnowledgeSourceGate } from './services/k
  * `chunks` 是始终可用的全文文本事实源。每个嵌入空间都有独立物理表，避免
  * 不同模型、维度或距离语义的向量混写进同一 Arrow FixedSizeList。
  */
-import * as lancedb from '@lancedb/lancedb'
+import type * as lancedb from '@lancedb/lancedb'
+import { Index, openLanceDatabase } from './lance-database'
 import { Field, FixedSizeList as ArrowFixedSizeList, Float32, Int32, Utf8, Schema as ArrowSchema } from 'apache-arrow'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -217,9 +218,35 @@ async function getConnectionInternal(projectPath: string): Promise<lancedb.Conne
   if (cached) return cached
 
   fs.mkdirSync(dbPath, { recursive: true })
-  const db = await lancedb.connect(dbPath)
+  const db = await openLanceDatabase(dbPath)
   connectionPool.set(dbPath, db)
   return db
+}
+
+/**
+ * 能证明卷不支持硬链接的码。Windows 上 CreateHardLinkW 在 exFAT 报 ERROR_INVALID_FUNCTION，libuv 映射成 EISDIR，
+ * ERROR_NOT_SUPPORTED 映射成 ENOTSUP（win/error.c）；macOS 的 msdosfs 没有 link 操作，返回 ENOTSUP。
+ * 其余码（权限、磁盘满、句柄用尽等）与卷无关，原样报出，不引导作者搬书。
+ */
+const LINK_UNSUPPORTED_CODES = new Set(['EISDIR', 'ENOTSUP'])
+
+/**
+ * LanceDB 本地提交靠硬链接（object_store 的 LocalFileSystem），exFAT、FAT32 等卷建不了硬链接，每次提交都会失败（#571）。
+ * 探测文件放在 temp：备份导出不收它，删不掉留下来也不挡导出。
+ */
+export function knowledgeStoreSupportsCommits(projectPath: string): boolean {
+  const directory = path.join(getProjectDataRoot(projectPath), 'temp')
+  fs.mkdirSync(directory, { recursive: true })
+  const source = path.join(directory, `.link-probe-${randomUUID()}`)
+  const link = `${source}.link`
+  fs.writeFileSync(source, '')
+  let failure: NodeJS.ErrnoException | undefined
+  try { fs.linkSync(source, link) } catch (error) { failure = error as NodeJS.ErrnoException }
+  for (const file of failure ? [source] : [link, source]) {
+    try { fs.unlinkSync(file) } catch { /* 删不掉（例如杀毒软件正在扫描）只留下空文件，不该让导入失败。 */ }
+  }
+  if (failure && !LINK_UNSUPPORTED_CODES.has(failure.code ?? '')) throw failure
+  return !failure
 }
 
 /** 关闭指定项目的连接 */
@@ -593,7 +620,7 @@ async function appendCanonicalRecords(
 
 async function ensureTextIndex(table: lancedb.Table): Promise<void> {
   try {
-    await table.createIndex('text', { config: lancedb.Index.fts() })
+    await table.createIndex('text', { config: Index.fts() })
   } catch {
     // 已有索引和不支持 FTS 的旧 LanceDB 都不应阻断文本写入。
   }
@@ -1632,7 +1659,7 @@ async function readPortableKnowledgeSnapshotInternal(projectStorageRoot: string)
     throw new Error('PORTABLE_KNOWLEDGE_INVALID')
   }
   assertPhysicalTree(dbPath)
-  const db = await lancedb.connect(dbPath)
+  const db = await openLanceDatabase(dbPath)
   try {
     const tableNames = await db.tableNames()
     const hasDocuments = tableNames.includes(DOCS_TABLE_NAME)
@@ -1706,7 +1733,7 @@ export async function restorePortableKnowledgeSnapshot(
     }
     if (snapshot.documents.length === 0) return snapshot
     fs.mkdirSync(dbPath, { recursive: false })
-    const db = await lancedb.connect(dbPath)
+    const db = await openLanceDatabase(dbPath)
     try {
       const documentRows: DocumentInfo[] = snapshot.documents.map(document => ({
         id: document.docId,

@@ -53,7 +53,7 @@ export interface ProviderUsageEvidence {
   reasoningTokens: number | null
   accounting: 'included-in-completion' | 'separately-billed' | 'unknown'
   totalIncludesReasoning: boolean
-  protocol: 'openai' | 'gemini'
+  protocol: 'openai' | 'gemini' | 'anthropic'
 }
 
 export interface ILLMProvider {

@@ -68,7 +68,7 @@ vi.mock('../../i18n', () => ({
   mainText: vi.fn((_locale: string, zh: string) => zh),
 }))
 
-import { registerKBController } from '../kb-controller'
+import { getEmbeddingConfig, registerKBController } from '../kb-controller'
 
 function rawHandler(channel: string): IpcHandler {
   const registered = mocks.handlers.get(channel)
@@ -562,5 +562,24 @@ describe('reference import failures', () => {
       errorCode: 'IMPORT_RUN_REFERENCE_UNBOUND',
       error: '导入没能继续：校验没有通过（IMPORT_RUN_REFERENCE_UNBOUND）。请重试；如果仍然出现，请把这段说明反馈给我们。',
     })
+  })
+})
+
+describe('embedding config fallback by protocol', () => {
+  const generationModel = {
+    id: 'default', name: 'Default', provider: 'custom', modelName: 'm', apiKey: 'k', baseUrl: 'https://gateway.example/v1',
+    temperature: 0.7, maxTokens: 1024,
+  }
+  const withModel = (model: Record<string, unknown>) => mocks.readJsonFile.mockImplementation((file: string, fallback: unknown) =>
+    file === 'global.json' ? { defaultModelId: 'default' } : file === 'models.json' ? [model] : fallback)
+
+  it('keeps the OpenAI-compatible fallback for a legacy profile without a protocol field', () => {
+    withModel(generationModel)
+    expect(getEmbeddingConfig()).toMatchObject({ model: { modelName: 'm', baseUrl: 'https://gateway.example/v1' } })
+  })
+
+  it('never falls back to an Anthropic-protocol profile, which has no embedding endpoint', () => {
+    withModel({ ...generationModel, protocol: 'anthropic' })
+    expect(getEmbeddingConfig()).toBeNull()
   })
 })

@@ -183,7 +183,7 @@ export function ModelForm({
     invalidateDiscovery()
     const selection = {
       provider,
-      protocol: (p?.protocol ?? 'openai') as 'openai' | 'gemini',
+      protocol: (p?.protocol ?? 'openai') as ModelProfile['protocol'],
       baseUrl: p?.baseUrl ?? '',
       apiKey: '',
       modelName: '',
@@ -296,6 +296,9 @@ export function ModelForm({
             <option value="siliconflow">SiliconFlow</option>
             <option value="ollama">{text('Ollama（本地）', 'Ollama (local)')}</option>
             <option value="bigmodel">{text('BigModel（智谱）', 'BigModel (Zhipu)')}</option>
+            {!isEmbedding && (
+              <option value="bigmodel-anthropic">{text('BigModel（智谱 Anthropic）', 'BigModel (Zhipu Anthropic)')}</option>
+            )}
             <option value="custom">{text('自定义', 'Custom')}</option>
           </NativeSelect>
         </div>
@@ -303,10 +306,11 @@ export function ModelForm({
           <Label>{text('调用协议', 'Protocol')}</Label>
           <NativeSelect
             value={model.protocol}
-            onChange={(e) => up('protocol', e.target.value as 'openai' | 'gemini')}
+            onChange={(e) => up('protocol', e.target.value as ModelProfile['protocol'])}
           >
             <option value="openai">OpenAI</option>
             <option value="gemini">Gemini</option>
+            {!isEmbedding && <option value="anthropic">Anthropic</option>}
           </NativeSelect>
         </div>
       </div>

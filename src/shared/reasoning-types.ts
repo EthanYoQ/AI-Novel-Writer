@@ -29,7 +29,9 @@ export function isGeminiThinkingLevel(value: unknown): value is GeminiThinkingLe
 }
 
 export function reasoningAdapterFitsProtocol(protocol: unknown, adapter: ProviderReasoningDirective['adapter']): boolean {
-  return (protocol === 'gemini') === (adapter === 'gemini-thinking-budget' || adapter === 'gemini-thinking-level')
+  if (adapter === 'gemini-thinking-budget' || adapter === 'gemini-thinking-level') return protocol === 'gemini'
+  // 没写协议的旧配置按 OpenAI 兼容处理；anthropic 协议暂无经验证的推理参数映射。
+  return protocol !== 'gemini' && protocol !== 'anthropic'
 }
 
 export type ProviderReasoningDirective =

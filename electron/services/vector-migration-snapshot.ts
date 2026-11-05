@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
-import * as lancedb from '@lancedb/lancedb'
+import { openLanceDatabase } from '../lance-database'
 import { createRequire } from 'node:module'
 import type { Table as ArrowTable, Field as ArrowField } from 'apache-arrow'
 // LanceDB returns CommonJS Arrow instances; use that same runtime for IPC serialization.
@@ -145,7 +145,7 @@ async function readSnapshot(storageRoot: string): Promise<VectorMigrationSnapsho
   const tables: VectorMigrationSnapshot['tables'] = []
   const dbPath = path.join(storageRoot, 'lancedb')
   if (fs.existsSync(dbPath)) {
-    const connection = await lancedb.connect(dbPath)
+    const connection = await openLanceDatabase(dbPath)
     try {
       for (const name of (await connection.tableNames()).sort()) {
         const table = await connection.openTable(name)
@@ -186,7 +186,7 @@ export async function importVectorStoreForMigration({ targetStorageRoot, snapsho
   if (snapshot.version !== 1 || expected.logicalHash !== snapshot.summary.logicalHash) fail('VECTOR_MIGRATION_SNAPSHOT_INVALID')
   if (vectorObjects.some(name => fs.existsSync(path.join(root, name)))) fail('VECTOR_MIGRATION_TARGET_NOT_EMPTY')
   if (snapshot.tables.length) {
-    const connection = await lancedb.connect(path.join(root, 'lancedb'))
+    const connection = await openLanceDatabase(path.join(root, 'lancedb'))
     try {
       for (const item of snapshot.tables) {
         const arrow = tableFromIPC(item.arrowIpc)

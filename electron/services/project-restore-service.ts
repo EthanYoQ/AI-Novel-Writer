@@ -9,10 +9,10 @@ import {
   createCanonicalProjectManifest,
   parseCanonicalProjectManifest,
 } from '../../src/shared/project-format'
-import { assertPortableSourceSchema, portablePathKey } from './portable-project-format'
+import { PORTABLE_SOURCE_SCHEMA_VERSION, assertPortableSourceSchema, portablePathKey } from './portable-project-format'
 import { extractPortableProjectArchive } from './portable-project-archive'
 import { PORTABLE_RUNTIME_HISTORY_MAX_BYTES, parsePortableRuntimeFreeze, readPortableRuntimeFreeze } from './portable-runtime-freeze'
-import { verifyProjectSqlite } from './sqlite-project-migration'
+import { upgradeProjectSqlite, verifyProjectSqlite } from './sqlite-project-migration'
 import {
   parsePortableKnowledgeSnapshot,
   restorePortableKnowledgeSnapshot,
@@ -517,6 +517,7 @@ async function installedReceipt(
   targetRoot: string,
   authority: PortableTransferAuthority,
   entries: readonly { path: string; byteSize: number; sha256: string; disposition: string }[],
+  installedDatabaseSha256: string,
 ): Promise<RestorePortableProjectReceipt | null> {
   if (!fs.existsSync(targetRoot)) return null
   physicalDirectory(targetRoot)
@@ -543,7 +544,8 @@ async function installedReceipt(
   for (const entry of entries) {
     if (entry.path === PORTABLE_TRANSFER_AUTHORITY_PATH) continue
     const file = path.join(storage, ...entry.path.split('/'))
-    if (!fs.existsSync(file) || await hashPhysicalFile(file) !== entry.sha256) return null
+    const expected = portablePathKey(entry.path) === CANONICAL_PROJECT_DATABASE ? installedDatabaseSha256 : entry.sha256
+    if (!fs.existsSync(file) || await hashPhysicalFile(file) !== expected) return null
   }
   const databasePath = path.join(storage, CANONICAL_PROJECT_DATABASE)
   try {
@@ -780,6 +782,18 @@ export async function restorePortableProject(input: RestorePortableProjectInput)
     const freezeBytes = readPhysicalFile(freezePath, PORTABLE_RUNTIME_HISTORY_MAX_BYTES).bytes
     assertFreeze(json(freezeBytes), authority.originProjectId, authority.snapshotGeneration)
     const freeze = parsePortableRuntimeFreeze(freezeBytes)
+    const sourceSchemaVersion = extracted.manifest.sourceSchemaVersion
+    if (sourceSchemaVersion !== PORTABLE_SOURCE_SCHEMA_VERSION) {
+      // M07 之前导出的包：先按它自己的版本校验，再在解出的副本上迁到当前版本；包里的原件不动。
+      verifyProjectSqlite({ databasePath, targetVersion: sourceSchemaVersion })
+      const source = new BetterSqlite(databasePath, { readonly: true, fileMustExist: true })
+      try { assertPortableSourceSchema(source, sourceSchemaVersion) } finally { source.close() }
+      try { upgradeProjectSqlite({ databasePath }) } catch { fail('PORTABLE_RESTORE_INVALID') } finally {
+        for (const suffix of ['-wal', '-shm', '-journal']) captureGeneratedFileIfPresent(attempt, databasePath + suffix)
+      }
+    }
+    // 迁移后的库与包里的原件字节不同；已装好的项目按迁移后的哈希认领。迁移是确定的，重试得到同样的字节。
+    const installedDatabaseSha256 = await hashFile(databasePath)
     verifyProjectSqlite({ databasePath })
     const database = new BetterSqlite(databasePath, { readonly: true, fileMustExist: true })
     try {
@@ -805,7 +819,7 @@ export async function restorePortableProject(input: RestorePortableProjectInput)
         reservationOwned(journal, targetRoot)
         cleanupInstallTemporaries(journal, targetRoot)
       }
-      const installed = await installedReceipt(targetRoot, authority, extracted.manifest.entries)
+      const installed = await installedReceipt(targetRoot, authority, extracted.manifest.entries, installedDatabaseSha256)
       if (installed) {
         if (journal) {
           if (journal.document.targetProjectId !== installed.targetProjectId) fail('PORTABLE_RESTORE_UNSAFE_TARGET')
@@ -893,7 +907,7 @@ export async function restorePortableProject(input: RestorePortableProjectInput)
     }
     cancelled(input.signal)
     await installStagedProject(attempt, storage, targetRoot, journal)
-    const installed = await installedReceipt(targetRoot, authority, extracted.manifest.entries)
+    const installed = await installedReceipt(targetRoot, authority, extracted.manifest.entries, installedDatabaseSha256)
     if (!installed || installed.targetProjectId !== targetProjectId) fail('PORTABLE_RESTORE_UNSAFE_TARGET')
     input.__testHooks?.afterInstallCommitted?.(targetRoot)
     releaseInstallJournal(journal, targetRoot, true)

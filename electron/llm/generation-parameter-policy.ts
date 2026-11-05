@@ -29,6 +29,17 @@ const KIMI_FIXED_TEMPERATURE_MODEL_PREFIXES = [
   'kimi-k2.5',
 ]
 
+// 这些模型对非默认 temperature/top_p/top_k 回 400（官方 Thinking 文档「Sampling parameters」一节）。
+const CLAUDE_NO_SAMPLING_MODEL_PREFIXES = [
+  'claude-fable-5',
+  'claude-mythos',
+  'claude-opus-5',
+  'claude-sonnet-5',
+  'claude-haiku-5',
+  'claude-opus-4-8',
+  'claude-opus-4-7',
+]
+
 function hasModelFamilyPrefix(modelName: string, prefixes: readonly string[]): boolean {
   const normalized = modelName.trim().toLowerCase()
   return prefixes.some(prefix => normalized === prefix || normalized.startsWith(`${prefix}-`))
@@ -91,6 +102,9 @@ export function resolveGenerationParameters(
   const usesFixedKimiTemperature = isOfficialKimi
     && hasModelFamilyPrefix(model.modelName, KIMI_FIXED_TEMPERATURE_MODEL_PREFIXES)
 
+  const rejectsSampling = model.protocol === 'anthropic'
+    && hasModelFamilyPrefix(model.modelName, CLAUDE_NO_SAMPLING_MODEL_PREFIXES)
+
   if (isOfficialKimi && !usesFixedKimiTemperature) {
     validateKimiTemperature(model.temperature)
   }
@@ -103,7 +117,9 @@ export function resolveGenerationParameters(
   const limits = resolveGenerationCapabilityConstraints(model)
 
   return {
-    temperature: usesFixedKimiTemperature ? undefined : model.temperature,
+    temperature: usesFixedKimiTemperature || rejectsSampling ? undefined
+      // Anthropic Messages 的 temperature 文档范围是 0–1，设置页允许到 2。
+      : model.protocol === 'anthropic' ? Math.min(model.temperature, 1) : model.temperature,
     maxTokens: Math.min(request.maxTokens ?? Infinity, limits.userMaxOutputTokens ?? Infinity,
       limits.modelMaxOutputTokens ?? Infinity),
     ...(request.responseFormat ? { responseFormat: request.responseFormat } : {}),

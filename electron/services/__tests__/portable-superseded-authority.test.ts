@@ -127,6 +127,14 @@ describe('备份恢复的项目替换一章定稿', { timeout: 60_000 }, () => {
     expect(currentAuthority(restored)).not.toBeNull()
   })
 
+  it('v1.4.0 及更早导入的作品（收据记 schema 7）升到 v8 后，转移授权仍可读', async () => {
+    const { restored } = await restoredProject('v7-receipt')
+    const file = path.join(restored.root, '.ai-novel', 'portable-transfer-authority.json')
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).sourceSchemaVersion).toBe(8)
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), sourceSchemaVersion: 7 }))
+    expect(currentAuthority(restored)).not.toBeNull()
+  })
+
   it('被替换的旧定稿正文被改过时，转移授权校验仍然拒绝', async () => {
     const { restored } = await restoredProject('tamper')
     finalizeChapter(10, 1, '第一章新稿：钟声提前了一刻。', 2)

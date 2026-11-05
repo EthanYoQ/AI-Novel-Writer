@@ -741,6 +741,23 @@ describe('retrieval model connection test', () => {
     }
   })
 
+  it('refuses an Anthropic-protocol retrieval model without sending any request', async () => {
+    mocks.locale = 'en-US'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const result = await mocks.handlers.get('llm:test-connection')!({}, {
+        ...retrievalModel, provider: 'bigmodel-anthropic', protocol: 'anthropic', baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+      }) as { success: boolean; error: string }
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('Anthropic')
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(mocks.generate).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('keeps the suggested OpenAI-compatible Ollama address', async () => {
     mocks.locale = 'en-US'
     const result = await mocks.handlers.get('llm:test-connection')!({}, { ...retrievalModel, baseUrl: 'http://localhost:11434/api' }) as { success: boolean; error: string }

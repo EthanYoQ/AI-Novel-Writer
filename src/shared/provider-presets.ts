@@ -405,6 +405,36 @@ export function createProviderCatalog(): ProviderPreset[] {
     embeddingModels: ['embedding-3'],
   },
   {
+    /**
+     * 智谱 BigModel — Anthropic Messages 兼容协议，API 前缀为 /api/anthropic。
+     * 模型 ID 与 OpenAI 兼容端点一致；该协议没有嵌入接口，也不声明 JSON 模式与推理映射。
+     */
+    provider: 'bigmodel-anthropic',
+    displayName: 'BigModel（智谱 Anthropic）',
+    baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+    protocol: 'anthropic',
+    models: [
+      { name: 'glm-4.5', maxTokens: 65536 },
+      { name: 'glm-4.5-air', maxTokens: 65536 },
+      { name: 'glm-4.6', maxTokens: 65536 },
+      { name: 'glm-4.7', maxTokens: 65536 },
+      { name: 'glm-4.7-flashx', maxTokens: 65536 },
+      { name: 'glm-5-turbo', maxTokens: 65536 },
+      { name: 'glm-5', maxTokens: 65536 },
+      {
+        name: 'glm-5.3', maxTokens: 65_536,
+        budgetCapabilities: {
+          contextWindowTokens: 1_000_000, maxOutputTokens: 131_072,
+          evidence: {
+            sourceUrl: 'https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+    ],
+    embeddingModels: [],
+  },
+  {
     provider: 'gemini',
     displayName: 'Google Gemini',
     baseUrl: 'https://generativelanguage.googleapis.com',

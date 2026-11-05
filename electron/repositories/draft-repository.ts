@@ -8,14 +8,15 @@ import { createHash } from 'node:crypto'
 import type BetterSqlite3 from 'better-sqlite3'
 import { getProjectDb } from '../database'
 import { ContentRepository } from './content-repository'
+import { nextDraftVersion } from './draft-version'
 import type { DraftSourceDependency } from '../../src/shared/draft-source-dependency'
 import { RECEIPTED_DRAFT_STATUS_SQL, WORKING_DRAFT_STATUS_SQL, isReceiptedDraftStatus, type DraftStatus } from '../../src/shared/draft-status'
 import { isOpenReopenDraft, reopenedFinal } from '../../src/shared/chapter-reopen'
 
 const DRAFT_META_SELECT = `
   SELECT drafts.*, finalization_outbox.chapter_title, finalization_outbox.finalization_id
-  FROM drafts
-  LEFT JOIN finalization_outbox
+  FROM live_drafts AS drafts
+  LEFT JOIN live_finalization_outbox AS finalization_outbox
     ON drafts.status IN (${RECEIPTED_DRAFT_STATUS_SQL}) AND finalization_outbox.draft_id = drafts.id
 `
 
@@ -130,14 +131,14 @@ function dependencyStates(
                  finalization_outbox.content_hash AS receipt_content_hash,
                  finalization_outbox.content_snapshot,
                  NOT EXISTS (
-                   SELECT 1 FROM drafts newer
+                   SELECT 1 FROM live_drafts newer
                    WHERE newer.chapter_number = drafts.chapter_number
                      AND newer.status = 'finalized'
                      AND (newer.version > drafts.version OR (newer.version = drafts.version AND newer.id > drafts.id))
                  ) AS authoritative_finalized
-          FROM drafts
+          FROM live_drafts AS drafts
           JOIN contents ON contents.id = drafts.content_id
-          LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+          LEFT JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id = drafts.id
           WHERE drafts.id IN (${placeholders})
         `).all(...chunk) as Array<{
             id: number
@@ -311,7 +312,7 @@ function rowToMeta(
 
 function openReopenDraft(db: BetterSqlite3.Database, chapterNumber: number): { id: number; version: number } | null {
     const rows = db.prepare(`
-      SELECT id, version, status, source_dependencies FROM drafts
+      SELECT id, version, status, source_dependencies FROM live_drafts
       WHERE chapter_number = ? AND status IN (${WORKING_DRAFT_STATUS_SQL})
       ORDER BY version DESC, id DESC
     `).all(chapterNumber) as Array<{ id: number; version: number; status: DraftStatus; source_dependencies: string }>
@@ -335,7 +336,7 @@ function assertChapterAcceptsNewDraft(
     dependencies: readonly DraftSourceDependency[],
 ): void {
     const finalized = db.prepare(`
-      SELECT 1 FROM drafts WHERE chapter_number = ? AND status = 'finalized' LIMIT 1
+      SELECT 1 FROM live_drafts WHERE chapter_number = ? AND status = 'finalized' LIMIT 1
     `).get(chapterNumber)
     if (!finalized) return
     if (!reopenedFinal({ chapterNumber, sourceDependencies: dependencies })) {
@@ -374,10 +375,7 @@ export class DraftRepository {
             }
             assertChapterAcceptsNewDraft(db, params.chapterNumber, parsedDependencies.dependencies)
 
-            const row = db.prepare(`
-        SELECT MAX(version) as maxVer FROM drafts WHERE chapter_number = ?
-      `).get(params.chapterNumber) as { maxVer: number | null }
-            const version = (row.maxVer ?? 0) + 1
+            const version = nextDraftVersion(db, params.chapterNumber)
 
             const contentId = Number(db.prepare('INSERT INTO contents(body) VALUES(?)').run(params.content).lastInsertRowid)
             const result = db.prepare(`
@@ -486,11 +484,7 @@ export class DraftRepository {
         const db = getProjectDb()
         if (!db) return 1
 
-        const row = db.prepare(`
-      SELECT MAX(version) as maxVer FROM drafts WHERE chapter_number = ?
-    `).get(chapterNumber) as { maxVer: number | null }
-
-        return (row.maxVer ?? 0) + 1
+        return nextDraftVersion(db, chapterNumber)
     }
 
     /** 获取最大的已定稿章节号，如果没有则返回 0 */
@@ -499,7 +493,7 @@ export class DraftRepository {
         if (!db) return 0
         const row = db.prepare(`
             SELECT MAX(chapter_number) as maxChapter
-            FROM drafts
+            FROM live_drafts
             WHERE status = 'finalized'
         `).get() as { maxChapter: number | null }
         return row?.maxChapter ?? 0
@@ -559,7 +553,7 @@ export class DraftRepository {
             // 状态必须与 DELETE 位于同一权威事务；菜单打开时的 renderer 状态
             // 不能授权删除在确认期间已经定稿的事实。
             const target = db.prepare(`
-              SELECT status, content_id FROM drafts WHERE id = ?
+              SELECT status, content_id FROM live_drafts WHERE id = ?
             `).get(id) as { status: string; content_id: number } | undefined
             if (!target) return
             if (target.status === 'finalized') {

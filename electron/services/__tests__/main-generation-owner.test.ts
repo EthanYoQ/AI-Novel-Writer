@@ -2554,10 +2554,10 @@ describe('main draft persistence and batch lineage', () => {
     expect(DraftRepository.getFull(replacement)?.content).toBe('作者创建的新版本。')
     expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
-  it('refuses to reopen a chapter written by an unfinished batch and keeps the batch resumable', async () => {
+  it('refuses to reopen a chapter written by an unfinished auto-finalize batch and keeps the batch resumable', async () => {
     const f = drafting()
     f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
-    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+    const batch = f.owner.beginBatch({ mode: 'auto_finalize', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
       uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
     const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
     const saved = f.owner.commitDraft(generated.request)
@@ -2565,7 +2565,7 @@ describe('main draft persistence and batch lineage', () => {
       chapterTitle: '第一章', content: saved.content, contentHash: textHash(saved.content), contentRevision: 1, targetFileName: '第一章.txt' })
 
     expect(() => reopenFinalizedChapter('project', { chapterNumber: 1 })).toThrow('CHAPTER_REOPEN_BATCH_UNFINISHED')
-    expect(f.owner.readBatch(batch.batchId)).toMatchObject({ nextChapterNumber: 2 })
+    expect(f.owner.readBatch(batch.batchId)).toMatchObject({ nextChapterNumber: 1, completedChapters: [expect.objectContaining({ pendingFinalizationId: 'batch-final' })] })
     expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
   })
   it('reopens a chapter from an unfinished batch that can no longer resume because the author edited and finalized it', async () => {
@@ -2641,10 +2641,10 @@ describe('main draft persistence and batch lineage', () => {
     expect(reopenFinalizedChapter('project', { chapterNumber: 1 })).toMatchObject({ success: true, created: true })
     expect(DraftRepository.getMeta(saved.id)?.status).toBe('finalized')
   })
-  it('refuses to reopen a chapter written by a paused batch', async () => {
+  it('refuses to reopen a chapter written by a paused auto-finalize batch', async () => {
     const f = drafting()
     f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
-    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+    const batch = f.owner.beginBatch({ mode: 'auto_finalize', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
       uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
     const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
     const saved = f.owner.commitDraft(generated.request)
@@ -2654,6 +2654,83 @@ describe('main draft persistence and batch lineage', () => {
 
     expect(() => reopenFinalizedChapter('project', { chapterNumber: 1 })).toThrow('CHAPTER_REOPEN_BATCH_UNFINISHED')
     expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+  })
+  it('reopens a chapter written by a batch whose root was blocked and can never continue (#568)', async () => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const batch = f.owner.beginBatch({ mode: 'auto_finalize', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const selection = { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId }
+    const first = await generate(f, selection), saved = f.owner.commitDraft(first.request)
+    FinalizationRepository.commit({ finalizationId: 'batch-final', draftId: saved.id, chapterNumber: 1, chapterTitle: '第一章', content: saved.content,
+      contentHash: saved.contentHash, contentRevision: 1, targetFileName: '第一章.txt' })
+    FinalizationRepository.markPublished('batch-final')
+    const post = PostProcessRepository.createRun({ triggerSourceType: 'chapter_finalize', triggerSourceId: '1', sourceLabel: '第一章',
+      finalizedSource: { finalizationId: 'batch-final', draftId: saved.id, chapterNumber: 1, contentHash: saved.contentHash },
+      steps: [{ key: 'kb_import', label: '知识库', critical: true }, { key: 'chapter_notes', label: '章节笔记', critical: true }] })
+    PostProcessRepository.markStepOk(post, 'kb_import')
+    PostProcessRepository.markStepOk(post, 'chapter_notes')
+    expect(f.owner.confirmBatchFinalization({ batchId: batch.batchId, chapterNumber: 1, finalizationId: 'batch-final' }).nextChapterNumber).toBe(2)
+    expect(() => reopenFinalizedChapter('project', { chapterNumber: 1 })).toThrow('CHAPTER_REOPEN_BATCH_UNFINISHED')
+
+    new GenerationRunRepository(() => f.db).block(batch.rootHandle.rootActionId, 'ROOT_BUDGET_EXHAUSTED')
+    expect(() => f.owner.begin({ ...selection, chapterNumber: 2, uiActionNonce: 'chapter2', selectedFinalizedDraftIds: [saved.id] }))
+      .toThrow('GENERATION_DIRECTORY_CONTINUATION_BLOCKED')
+
+    expect(reopenFinalizedChapter('project', { chapterNumber: 1 })).toMatchObject({ success: true, created: true })
+    expect(DraftRepository.getMeta(saved.id)?.status).toBe('finalized')
+  })
+  it.each(['published', 'pending'] as const)('ends a review batch once the author finalizes a chapter it wrote, so that chapter reopens (%s, #568)', async state => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const selection = { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId }
+    const saved = f.owner.commitDraft((await generate(f, selection)).request)
+    expect(f.owner.listBatches()).toEqual([expect.objectContaining({ batchId: batch.batchId, sourceCurrent: true, nextChapterNumber: 2 })])
+    FinalizationRepository.commit({ finalizationId: 'author-final', draftId: saved.id, chapterNumber: 1, chapterTitle: '第一章', content: saved.content,
+      contentHash: saved.contentHash, contentRevision: 1, targetFileName: '第一章.txt' })
+    if (state === 'published') FinalizationRepository.markPublished('author-final')
+
+    expect(f.owner.listBatches()).toEqual([expect.objectContaining({ batchId: batch.batchId, sourceCurrent: false, nextChapterNumber: 2 })])
+    expect(() => f.owner.begin({ ...selection, chapterNumber: 2, uiActionNonce: 'chapter2', selectedDraftIds: [saved.id] }))
+      .toThrow('GENERATION_BATCH_FINALIZATION_CONFLICT')
+    expect(reopenFinalizedChapter('project', { chapterNumber: 1 })).toMatchObject({ success: true, created: true })
+  })
+  it('ends a review batch whose next chapter had already started when the author finalized the chapter before it (#568)', async () => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const selection = { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId }
+    const saved = f.owner.commitDraft((await generate(f, selection)).request)
+    const interrupted = f.owner.begin({ ...selection, chapterNumber: 2, uiActionNonce: 'chapter2', selectedDraftIds: [saved.id] })
+    FinalizationRepository.commit({ finalizationId: 'author-final', draftId: saved.id, chapterNumber: 1, chapterTitle: '第一章', content: saved.content,
+      contentHash: saved.contentHash, contentRevision: 1, targetFileName: '第一章.txt' })
+    FinalizationRepository.markPublished('author-final')
+
+    expect(f.owner.listBatches()).toEqual([expect.objectContaining({ batchId: batch.batchId, sourceCurrent: false, nextChapterNumber: 2,
+      currentChapterRunHandle: interrupted.handle })])
+    expect(() => f.owner.readBatch(batch.batchId)).toThrow('GENERATION_BATCH_FINALIZATION_CONFLICT')
+    expect(reopenFinalizedChapter('project', { chapterNumber: 1 })).toMatchObject({ success: true, created: true })
+  })
+  it('ends a review batch once the author finalizes an older draft of a chapter it wrote, so that chapter reopens (#568)', async () => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const older = '作者先前手写的第一章。'
+    const olderId = DraftRepository.create({ chapterNumber: 1, source: 'write', content: older, wordCount: older.length })
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const selection = { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId }
+    const saved = f.owner.commitDraft((await generate(f, selection)).request)
+    expect(saved.version).toBe(2)
+    FinalizationRepository.commit({ finalizationId: 'older-final', draftId: olderId, chapterNumber: 1, chapterTitle: '第一章', content: older,
+      contentHash: textHash(older), contentRevision: 1, targetFileName: '第一章.txt' })
+
+    expect(f.owner.listBatches()).toEqual([expect.objectContaining({ batchId: batch.batchId, sourceCurrent: false, nextChapterNumber: 2 })])
+    expect(() => f.owner.begin({ ...selection, chapterNumber: 2, uiActionNonce: 'chapter2', selectedDraftIds: [saved.id] }))
+      .toThrow('GENERATION_BATCH_FINALIZATION_CONFLICT')
+    expect(reopenFinalizedChapter('project', { chapterNumber: 1 })).toMatchObject({ success: true, created: true })
   })
   it.each(['draft_review', 'auto_finalize'] as const)('reads revised finalization without crediting the original %s batch', async mode => {
     const f = drafting()
