@@ -566,7 +566,26 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       })),
     }
 
-    // 添加到活跃列表
+    // 运行一出现在界面上就有暂停、取消按钮，执行上下文要同时就位，否则写作 Skill 快照读取期间的点击会落空。
+    const context: WorkflowContext = {
+      ...(definition.agentWorkflowRegistration ? { mainGenerationRootHandle: definition.agentWorkflowRegistration.parentHandle,
+        agentWorkflowRegistrationId: definition.agentWorkflowRegistration.registrationId } : {}),
+      runId: run.id,
+      projectPath: definition.projectPath,
+      projectSession,
+      writingLanguage,
+      uiLocale,
+      ...(generationModelId ? { generationModelId } : {}),
+      ...(chapterWordsTarget ? { chapterWordsTarget } : {}),
+      data: {},
+      cancelled: false,
+      pauseRequested: false,
+    }
+    activeContexts.set(run.id, context)
+    if (definition.onCancelRequested) cancelRequestedHooks.set(run.id, definition.onCancelRequested)
+    if (definition.type !== 'novel_import' && definition.onCancelledAtBoundary) {
+      cancelBoundaryHooks.set(run.id, definition.onCancelledAtBoundary)
+    }
     set(s => {
       const newRuns = [...s.activeRuns, run]
       const newHistory = s.history.filter(previous => previous.id !== run.id)
@@ -577,9 +596,24 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       }
     })
 
-    let writingSkills: FrozenWritingSkillSnapshot = Object.freeze({})
+    const failBeforeFirstStep = (error: string) => {
+      updateRunById(set, run.id, { status: 'failed', completedAt: new Date().toISOString(), error })
+      set(s => {
+        const failedRun = s.activeRuns.find(active => active.id === run.id)
+        const newRuns = s.activeRuns.filter(active => active.id !== run.id)
+        return {
+          activeRuns: newRuns,
+          history: failedRun ? prependRunHistory(s.history, failedRun) : s.history,
+          ...computeCompat(newRuns, s.waitingRuns),
+        }
+      })
+      activeContexts.delete(run.id)
+      cancelRequestedHooks.delete(run.id)
+      cancelBoundaryHooks.delete(run.id)
+    }
+
     try {
-      writingSkills = await freezeWritingSkillsSnapshot(projectSession, writingLanguage)
+      context.writingSkills = await freezeWritingSkillsSnapshot(projectSession, writingLanguage)
     } catch (error) {
       const reason = displayedErrorMessage(uiLocale, error)
       const failure = uiText(
@@ -587,20 +621,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         `写作 Skill 快照加载失败，工作流未启动：${reason}`,
         `Writing skill snapshot could not be loaded, so the workflow was not started: ${reason}`,
       )
-      updateRunById(set, run.id, {
-        status: 'failed',
-        completedAt: new Date().toISOString(),
-        error: failure,
-      })
-      set(s => {
-        const failedRun = s.activeRuns.find(active => active.id === run.id)
-        const newRuns = s.activeRuns.filter(active => active.id !== run.id)
-        return {
-          activeRuns: newRuns,
-          history: failedRun ? prependRunHistory(s.history, failedRun) : s.history,
-          ...computeCompat(newRuns, s.waitingRuns),
-        }
-      })
+      failBeforeFirstStep(failure)
       get().addLog('error', failure, uiLocale)
       return runId
     }
@@ -608,27 +629,14 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       projectSession,
       projectSessionContextFromProject(useProjectStore.getState().currentProject),
     )) {
-      updateRunById(set, run.id, {
-        status: 'failed',
-        completedAt: new Date().toISOString(),
-        error: uiText(
-          uiLocale,
-          '写作 Skill 快照加载期间项目已切换，工作流未启动',
-          'The project changed while writing skills were being frozen, so the workflow was not started.',
-        ),
-      })
-      set(s => {
-        const failedRun = s.activeRuns.find(active => active.id === run.id)
-        const newRuns = s.activeRuns.filter(active => active.id !== run.id)
-        return {
-          activeRuns: newRuns,
-          history: failedRun ? prependRunHistory(s.history, failedRun) : s.history,
-          ...computeCompat(newRuns, s.waitingRuns),
-        }
-      })
+      failBeforeFirstStep(uiText(
+        uiLocale,
+        '写作 Skill 快照加载期间项目已切换，工作流未启动',
+        'The project changed while writing skills were being frozen, so the workflow was not started.',
+      ))
       return runId
     }
-    const writingSkillSummaries = Object.values(writingSkills).map(skill => ({
+    const writingSkillSummaries = Object.values(context.writingSkills).map(skill => ({
       stage: skill.stage,
       skillId: skill.skillId,
       name: skill.name,
@@ -645,28 +653,6 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     ), uiLocale)
 
     navigate({ kind: 'run', facet: 'output' })
-
-    // 创建执行上下文
-    const context: WorkflowContext = {
-      ...(definition.agentWorkflowRegistration ? { mainGenerationRootHandle: definition.agentWorkflowRegistration.parentHandle,
-        agentWorkflowRegistrationId: definition.agentWorkflowRegistration.registrationId } : {}),
-      runId: run.id,
-      projectPath: definition.projectPath,
-      projectSession,
-      writingLanguage,
-      uiLocale,
-      writingSkills,
-      ...(generationModelId ? { generationModelId } : {}),
-      ...(chapterWordsTarget ? { chapterWordsTarget } : {}),
-      data: {},
-      cancelled: false,
-      pauseRequested: false,
-    }
-    activeContexts.set(run.id, context)
-    if (definition.onCancelRequested) cancelRequestedHooks.set(run.id, definition.onCancelRequested)
-    if (definition.type !== 'novel_import' && definition.onCancelledAtBoundary) {
-      cancelBoundaryHooks.set(run.id, definition.onCancelledAtBoundary)
-    }
 
     const waitForResumeAtSafeBoundary = async () => {
       if (!context.pauseRequested || isCancellationPending(context)) return
@@ -692,8 +678,9 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
 
     // 逐步执行
     for (let i = 0; i < definition.steps.length; i++) {
-      // 批量任务只在步骤之间暂停，避免中断一次正在进行的模型请求或后处理。
-      await waitForResumeAtSafeBoundary()
+      // 批量任务只在步骤之间暂停，避免中断一次正在进行的模型请求或后处理；
+      // 第一步之前点的暂停同样等这一章写完，与按钮说明「写完当前这一章后暂停」一致。
+      if (i > 0) await waitForResumeAtSafeBoundary()
 
       if (!isCancellationPending(context) && ((stepByStep && i > 0) || definition.steps[i].requiresConfirmation)) {
         // Register before publishing waiting state so an immediate UI confirmation cannot be lost.
