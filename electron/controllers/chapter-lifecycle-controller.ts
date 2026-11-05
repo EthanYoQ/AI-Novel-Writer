@@ -1,7 +1,11 @@
 import { ipcMain } from 'electron'
 
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
-import type { DeleteFinalizedChapterRequest } from '../../src/shared/chapter-deletion'
+import type {
+  DeleteFinalizedChapterRequest,
+  PurgeTrashRequest,
+  RestoreTrashedChapterRequest,
+} from '../../src/shared/chapter-deletion'
 import type { ReopenChapterRequest } from '../../src/shared/chapter-reopen'
 import { getCurrentProjectPath } from '../database'
 import {
@@ -132,5 +136,35 @@ export function registerChapterLifecycleController(
   ) => {
     assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
     return { success: true, operations: service.listIncomplete(projectRoot) }
+  })
+
+  register('chapter:trash-list', async (
+    _event,
+    expectedProjectPath: string,
+    projectRoot: string,
+  ) => {
+    assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
+    return service.listTrash()
+  })
+
+  register('chapter:trash-restore', async (
+    _event,
+    request: RestoreTrashedChapterRequest,
+    expectedProjectPath: string,
+    projectRoot: string,
+    projectId: string,
+  ) => {
+    assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
+    return service.restore(projectRoot, projectId, request)
+  })
+
+  register('chapter:trash-purge', async (
+    _event,
+    request: PurgeTrashRequest,
+    expectedProjectPath: string,
+    projectRoot: string,
+  ) => {
+    assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
+    return service.purge(request)
   })
 }

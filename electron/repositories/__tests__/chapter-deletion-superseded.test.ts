@@ -72,7 +72,7 @@ function replacedLastChapter() {
 }
 
 describe('删除再定稿过的章节', () => {
-  it('同章收据行一起删除，删除收据与清理覆盖每份定稿的实体稿、知识库文档与后处理', async () => {
+  it('同章收据行一起进回收站，删除收据与清理覆盖每份定稿的实体稿与知识库文档，后处理留到彻底删除', async () => {
     const { old, oldRecord, current, currentRecord, working } = replacedLastChapter()
     const { removed, cleaner } = recordingCleaner()
     const service = new ChapterDeletionService({ cleaner, createOperationId: () => 'delete-2' })
@@ -96,7 +96,8 @@ describe('删除再定稿过的章节', () => {
         { draft_id: old, finalization_id: oldRecord.finalizationId },
         { draft_id: current, finalization_id: currentRecord.finalizationId },
       ],
-      runs: [`finalization:${FinalizationRepository.getByDraftId(1)!.finalizationId}`],
+      // 两份被删定稿的后处理留在回收站里（改记到各自定稿名下），彻底删除时一起删。
+      runs: [1, old, current].map(id => `finalization:${getProjectDb()!.prepare('SELECT finalization_id FROM finalization_outbox_all WHERE draft_id=?').pluck().get(id)}`).sort(),
       manuscripts: [oldRecord.targetFileName, currentRecord.targetFileName].sort(),
       knowledge: ['kb-2-new', 'kb-2-old'],
       sequence: { status: 'continuous', nextChapterNumber: 2 },

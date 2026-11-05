@@ -7,7 +7,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { closeProjectDatabase, createProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { DraftRepository } from '../../repositories/draft-repository'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
+import { ChapterDeletionRepository } from '../../repositories/chapter-deletion-repository'
 import { NarrativeThreadRepository } from '../../repositories/narrative-thread-repository'
+import { ReviewRepository } from '../../repositories/review-repository'
+import { RevisionRepository } from '../../repositories/revision-repository'
 import { SummaryRepository } from '../../repositories/summary-repository'
 import { createCanonicalProjectManifest } from '../../../src/shared/project-format'
 import { removeDirectoryWithWindowsRetry } from '../../utils/remove-directory'
@@ -15,7 +18,7 @@ import { buildGenerationSourceBinding, type GenerationSourceBindingInput } from 
 import { ProjectPeekService } from '../project-peek'
 
 // 回收站（#564）G7：被删行原地留在原表，任何读取路径都不能看见它。
-// PR2 还不产生 deleted 行，这里直接改原表造一行，正文、要点、线索证据都带哨兵串。
+// 走真实的删除路径造出被删行；正文、要点、线索证据、审稿与修稿都带哨兵串。
 const SENTINEL = '回收站哨兵串-7f3c9e'
 const DELETED_BODY = `第二章：${SENTINEL}，沉船里的铜钟响了。`
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -56,8 +59,13 @@ beforeEach(() => {
   db.prepare("INSERT INTO narrative_thread_confirmations_all(plan_id,draft_id,event_type,evidence,reason) VALUES(?,2,'planted',?,'')")
     .run(plan.id, SENTINEL)
 
-  db.prepare(`UPDATE drafts_all SET status='deleted', deletion_id='deletion-sentinel', deleted_from_status='finalized',
-    deleted_at='2026-11-05T00:00:00.000Z' WHERE id=2`).run()
+  db.prepare('INSERT INTO contents(id,body) VALUES(20,?),(21,?)').run(`审稿：${SENTINEL}`, `修稿：${SENTINEL}`)
+  db.prepare(`INSERT INTO reviews(id,base_draft_id,review_index,source_draft_chapter_number,source_draft_version,source_draft_status,source_content,content_id)
+    VALUES(20,2,1,2,1,'draft',?,20)`).run(DELETED_BODY)
+  db.prepare(`INSERT INTO revisions(id,base_draft_id,revision_index,revision_type,status,source_draft_chapter_number,source_draft_version,
+    source_draft_status,source_content,content_id) VALUES(21,2,1,'refine','pending',2,1,'draft',?,21)`).run(DELETED_BODY)
+
+  ChapterDeletionRepository.begin({ operationId: 'deletion-sentinel', draftId: 2, chapterNumber: 2 })
 })
 
 afterEach(async () => {
@@ -105,5 +113,15 @@ describe('被删行对读取路径不可见（哨兵串）', () => {
     expect(DraftRepository.getMaxFinalizedChapter()).toBe(1)
     expect(DraftRepository.getNextVersion(2)).toBe(2)
     expect(JSON.stringify(new ProjectPeekService().readCurrent(projectId, getProjectDb()!))).not.toContain(SENTINEL)
+  })
+
+  it('审稿与修稿：按稿列、取最新、按 id 取全文都读不出，待处理修稿也改不了状态', () => {
+    const reads = JSON.stringify([ReviewRepository.listByDraft(2), ReviewRepository.getLatestByDraft(2), ReviewRepository.getFull(20),
+      RevisionRepository.listByDraft(2), RevisionRepository.getPending(2), RevisionRepository.getFull(21)])
+    expect(reads).not.toContain(SENTINEL)
+    expect(reads).toBe('[[],null,null,[],[],null]')
+    expect(() => RevisionRepository.markMerged(21, 2)).toThrow('REVISION_NOT_PENDING')
+    expect(() => RevisionRepository.markDiscarded(21)).toThrow('REVISION_NOT_PENDING')
+    expect(getProjectDb()!.prepare('SELECT status FROM revisions WHERE id=21').pluck().get()).toBe('pending')
   })
 })

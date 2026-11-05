@@ -199,8 +199,8 @@ describe('M07 deletion columns and live views', () => {
 // G6：经外键挂在草稿上的表，要么本身改名为 _all 并在原名上有 live 视图，要么写明为什么暂不需要。
 const LIVE_VIEW_EXEMPT_TABLES: Readonly<Record<string, string>> = {
   contents: '只按 id 读，id 取自 drafts、reviews、revisions 的行；本身没有章号与状态',
-  reviews: '按 id 或 base_draft_id 读；ReviewRepository 的读取都带 LIVE_PARENT（父稿在 drafts 视图里），回收站章节的审稿读不出。用例见 chapter-trash-parent-alive.test.ts',
-  revisions: '按 id 或 base_draft_id 读；RevisionRepository 的读取和改状态都带 LIVE_PARENT，回收站章节的修稿读不出、改不了。用例见 chapter-trash-parent-alive.test.ts',
+  reviews: '按 id 或 base_draft_id 读；ReviewRepository 的读取都带 LIVE_PARENT（父稿在 drafts 视图里），回收站章节的审稿读不出。用例见 live-row-sentinel.test.ts 与 m03-review-cycle.test.ts',
+  revisions: '按 id 或 base_draft_id 读；RevisionRepository 的读取和改状态都带 LIVE_PARENT，回收站章节的修稿读不出、改不了。用例见 live-row-sentinel.test.ts',
   review_cycles: '按 cycle、review、revision 的 id 读，挂在 reviews 与 revisions 之下；getByReviewId 只认父稿还在的审稿',
   review_findings: '只按 cycle_id 读，挂在 review_cycles 之下',
   review_cycle_merges: '只按 cycle_id 读，挂在 review_cycles 之下',

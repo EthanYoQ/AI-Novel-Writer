@@ -1,8 +1,19 @@
-import { getProjectDb } from '../database'
-import { invalidateContinuityProjectionFrom } from './summary-repository'
+import { getCurrentProjectPath, getProjectDb } from '../database'
+import { readPortableRuntimeFreeze } from '../services/portable-runtime-freeze'
+import { countDraftUnits } from '../../src/shared/draft-units'
+import { WORKING_DRAFT_STATUS_SQL } from '../../src/shared/draft-status'
+import { CHAPTER_RESTORED_REPROJECTION_PENDING } from '../../src/shared/finalization-step-error'
+import { DraftRepository } from './draft-repository'
+import { FinalizationRepository } from './finalization-repository'
+import { PostProcessRepository } from './post-process-repository'
 import type {
   ChapterDeletionOperation,
   ChapterDeletionProjectionStatus,
+  ChapterRestoreMode,
+  DamagedTrashEntry,
+  RestoreTrashedChapterRequest,
+  RestoreTrashedChapterResult,
+  TrashedChapter,
 } from '../../src/shared/chapter-deletion'
 
 interface ChapterDeletionRow {
@@ -113,13 +124,17 @@ function companionRows(db: ReturnType<typeof requireDatabase>, operationId: stri
   `).all(prefix, prefix) as ChapterDeletionRow[]
 }
 
-function deleteChapterFacts(
+/**
+ * 删除把本章的定稿和全部被替换的旧定稿原地置为 deleted，进回收站（ADR-0025）。不推连续性水位：
+ * 后面各章的要点照常可信，被删章自己的要点与派生物经视图排除。按章号登记的旧后处理记录改记到这份定稿下，
+ * 否则缺口期间按章号找「最新后处理」会找到被删的那一份。
+ */
+function moveChapterToTrash(
   db: ReturnType<typeof requireDatabase>,
   operationId: string,
   target: FinalizedChapterTarget,
   postProcessRunIds: readonly string[],
 ): void {
-  invalidateContinuityProjectionFrom(db, target.chapter_number)
   const superseded = db.prepare(`
     SELECT drafts_all.id, drafts_all.content_id,
            finalization_outbox_all.finalization_id, finalization_outbox_all.chapter_title,
@@ -167,9 +182,68 @@ function deleteChapterFacts(
       finished ? 'completed' : 'pending',
       finished ? 1 : 0,
     )
-    deleteDraftFacts(db, row.id, row.content_id, runIds)
   }
-  deleteDraftFacts(db, target.id, target.content_id, postProcessRunIds)
+  const rekey = db.prepare(`
+    UPDATE post_process_runs SET trigger_source_id = ?
+    WHERE id = ? AND trigger_source_type = 'chapter_finalize' AND trigger_source_id = ?
+  `)
+  for (const runId of postProcessRunIds) rekey.run(`finalization:${target.finalization_id}`, runId, String(target.chapter_number))
+  const moved = db.prepare(`
+    UPDATE drafts_all
+    SET status = 'deleted', deletion_id = ?, deleted_from_status = status, deleted_at = datetime('now'), updated_at = datetime('now')
+    WHERE chapter_number = ? AND (id = ? OR status = 'superseded')
+  `).run(operationId, target.chapter_number, target.id)
+  if (moved.changes !== superseded.length + 1) throw new Error('CHAPTER_DELETE_SOURCE_CHANGED')
+}
+
+interface TrashRow {
+  id: number
+  deletion_id: string
+  chapter_number: number
+  deleted_from_status: string
+  deleted_at: string
+  word_count: number
+  content_id: number
+  finalization_id: string | null
+  chapter_title: string | null
+}
+
+const TRASH_ROWS_SQL = `
+  SELECT d.id, d.deletion_id, d.chapter_number, d.deleted_from_status, d.deleted_at, d.word_count, d.content_id,
+         o.finalization_id, o.chapter_title
+  FROM drafts_all d LEFT JOIN finalization_outbox_all o ON o.draft_id = d.id
+  WHERE d.status = 'deleted'`
+
+function restoreModeOf(
+  db: ReturnType<typeof requireDatabase>,
+  chapterNumber: number,
+  finalizationId: string,
+): ChapterRestoreMode {
+  if (db.prepare("SELECT 1 FROM drafts WHERE chapter_number = ? AND status = 'finalized'").get(chapterNumber)) return 'as-history'
+  return readPortableRuntimeFreeze(getCurrentProjectPath()).isFrozen('finalization_outbox', finalizationId)
+    ? 'reopen-as-draft'
+    : 'into-gap'
+}
+
+/** 一次删除带走的行收成回收站的一项；行不成形时抛错，由调用方决定是单列这一项还是拒绝。 */
+function trashEntryOf(db: ReturnType<typeof requireDatabase>, deletionId: string, rows: readonly TrashRow[]): TrashedChapter {
+  const primaries = rows.filter(row => row.deleted_from_status === 'finalized')
+  const primary = primaries[0]
+  if (primaries.length !== 1 || !primary?.finalization_id
+    || rows.some(row => row.chapter_number !== primary.chapter_number)) throw new Error('CHAPTER_TRASH_ENTRY_INVALID')
+  const receipt = getRow(deletionId)
+  if (!receipt || receipt.draft_id !== primary.id) throw new Error('CHAPTER_TRASH_RECEIPT_MISSING')
+  return {
+    deletionId,
+    draftId: primary.id,
+    chapterNumber: primary.chapter_number,
+    chapterTitle: primary.chapter_title ?? '',
+    deletedAt: primary.deleted_at,
+    wordCount: primary.word_count,
+    versionCount: rows.length,
+    cleanup: receipt.status,
+    restoreMode: restoreModeOf(db, primary.chapter_number, primary.finalization_id),
+  }
 }
 
 function deleteDraftFacts(
@@ -301,7 +375,7 @@ export class ChapterDeletionRepository {
       )
 
       if (input.legacyKnowledgeAuthorizationRequired) return input.operationId
-      deleteChapterFacts(db, input.operationId, target, postProcessRunIds)
+      moveChapterToTrash(db, input.operationId, target, postProcessRunIds)
       return input.operationId
     })
 
@@ -355,7 +429,7 @@ export class ChapterDeletionRepository {
       if (updated.changes !== 1) {
         throw new Error('CHAPTER_DELETE_LEGACY_CONFIRMATION_CONSUMED')
       }
-      deleteChapterFacts(db, operationId, target, frozenRunIds)
+      moveChapterToTrash(db, operationId, target, frozenRunIds)
       return operationId
     })
 
@@ -363,6 +437,129 @@ export class ChapterDeletionRepository {
     const operation = ChapterDeletionRepository.get(confirmedOperationId)
     if (!operation) throw new Error('CHAPTER_DELETE_OPERATION_NOT_FOUND')
     return operation
+  }
+
+  /** 回收站里一项的主定稿收据，恢复前用来选实体稿目标、判定批量。不在回收站时为 null。 */
+  static trashedFinal(deletionId: string): {
+    draftId: number; chapterNumber: number; chapterTitle: string; finalizationId: string; targetFileName: string; contentSnapshot: string
+  } | null {
+    const row = requireDatabase().prepare(`
+      SELECT d.id AS draftId, d.chapter_number AS chapterNumber, o.chapter_title AS chapterTitle, o.finalization_id AS finalizationId,
+             o.target_file_name AS targetFileName, o.content_snapshot AS contentSnapshot
+      FROM drafts_all d JOIN finalization_outbox_all o ON o.draft_id = d.id
+      WHERE d.deletion_id = ? AND d.status = 'deleted' AND d.deleted_from_status = 'finalized'
+    `).get(deletionId) as ReturnType<typeof ChapterDeletionRepository.trashedFinal> | undefined
+    return row ?? null
+  }
+
+  /** 回收站全部各项，新删的在前。一项读不全只单列这一项，不挡其余各项。 */
+  static listTrash(): { entries: TrashedChapter[]; damaged: DamagedTrashEntry[] } {
+    const db = requireDatabase()
+    return db.transaction(() => {
+      const groups = new Map<string, TrashRow[]>()
+      for (const row of db.prepare(`${TRASH_ROWS_SQL} ORDER BY d.id`).all() as TrashRow[]) {
+        groups.set(row.deletion_id, [...groups.get(row.deletion_id) ?? [], row])
+      }
+      const entries: TrashedChapter[] = []
+      const damaged: DamagedTrashEntry[] = []
+      for (const [deletionId, rows] of groups) {
+        try { entries.push(trashEntryOf(db, deletionId, rows)) }
+        catch (error) { damaged.push({ deletionId, error: error instanceof Error ? error.message : String(error) }) }
+      }
+      entries.sort((a, b) => b.deletedAt.localeCompare(a.deletedAt) || a.chapterNumber - b.chapterNumber)
+      return { entries, damaged }
+    })()
+  }
+
+  /**
+   * 把回收站里的一项放回去，一个事务，全有或全无。恢复方式在事务里重算，与作者确认时看到的不同就拒绝；
+   * 这次删除的清理没完成也拒绝（被冻结的收据除外，它的清理不在本机）。放回原位与作为旧版本放回都删掉
+   * 这次删除的收据，同一章以后才能再删；以被删稿开新稿不动回收站。
+   */
+  static restore(
+    request: RestoreTrashedChapterRequest,
+    republishTargetFileName?: string,
+  ): Exclude<RestoreTrashedChapterResult, { success: false }> {
+    const db = requireDatabase()
+    return db.transaction((): Exclude<RestoreTrashedChapterResult, { success: false }> => {
+      const rows = db.prepare(`${TRASH_ROWS_SQL} AND d.deletion_id = ? ORDER BY d.id`).all(request.deletionId) as TrashRow[]
+      if (rows.length === 0) {
+        const draft = db.prepare('SELECT chapter_number, status FROM drafts WHERE id = ?').get(request.draftId) as
+          { chapter_number: number; status: string } | undefined
+        if (!draft || !['finalized', 'superseded'].includes(draft.status)) {
+          throw new Error('CHAPTER_RESTORE_NOT_FOUND')
+        }
+        return { success: true, outcome: 'already-restored', chapterNumber: draft.chapter_number, draftId: request.draftId }
+      }
+      const entry = trashEntryOf(db, request.deletionId, rows)
+      if (entry.draftId !== request.draftId) throw new Error('CHAPTER_RESTORE_REQUEST_MISMATCH')
+      if (entry.restoreMode !== request.expectedMode) throw new Error('CHAPTER_RESTORE_MODE_CHANGED')
+      if (entry.cleanup !== 'completed'
+        && !readPortableRuntimeFreeze(getCurrentProjectPath()).isFrozen('chapter_deletion_operations', request.deletionId)) {
+        throw new Error('CHAPTER_RESTORE_CLEANUP_INCOMPLETE')
+      }
+      const primary = rows.find(row => row.id === entry.draftId)!
+      const chapterNumber = entry.chapterNumber
+
+      if (entry.restoreMode === 'reopen-as-draft') {
+        const body = db.prepare('SELECT body FROM contents WHERE id = ?').pluck().get(primary.content_id) as string
+        const existing = db.prepare(`
+          SELECT d.id FROM drafts d JOIN contents c ON c.id = d.content_id
+          WHERE d.chapter_number = ? AND d.status IN (${WORKING_DRAFT_STATUS_SQL}) AND c.body = ?
+          ORDER BY d.version DESC, d.id DESC LIMIT 1
+        `).pluck().get(chapterNumber, body) as number | undefined
+        if (existing !== undefined) return { success: true, outcome: 'reopened-as-draft', chapterNumber, draftId: existing, created: false }
+        const draftId = DraftRepository.create({ chapterNumber, source: 'rewrite', content: body, wordCount: countDraftUnits(body) }, db)
+        return { success: true, outcome: 'reopened-as-draft', chapterNumber, draftId, created: true }
+      }
+
+      const finalizationId = primary.finalization_id!
+      const intoGap = entry.restoreMode === 'into-gap'
+      FinalizationRepository.reinstateDeleted(db, {
+        deletionId: request.deletionId,
+        chapterNumber,
+        as: intoGap ? 'original' : 'superseded',
+        ...(intoGap ? { republish: { finalizationId, targetFileName: republishTargetFileName
+          ?? db.prepare('SELECT target_file_name FROM finalization_outbox_all WHERE finalization_id = ?').pluck().get(finalizationId) as string } } : {}),
+      })
+      const prefix = `${request.deletionId}${SUPERSEDED_SUFFIX}`
+      db.prepare(`
+        DELETE FROM chapter_deletion_operations WHERE operation_id = ? OR substr(operation_id, 1, length(?)) = ?
+      `).run(request.deletionId, prefix, prefix)
+      if (!intoGap) return { success: true, outcome: 'restored-as-history', chapterNumber, draftId: entry.draftId }
+
+      // 本章要点与角色派生字段绑定的收据没变，水位也没动，仍然可信；只有知识库文档在删除时清掉了，要重导。
+      const run = PostProcessRepository.getLatestRun('chapter_finalize', String(chapterNumber))
+      if (run && PostProcessRepository.getSteps(run.id).some(step => step.stepKey === 'kb_import')) {
+        PostProcessRepository.markStepFailed(run.id, 'kb_import', CHAPTER_RESTORED_REPROJECTION_PENDING)
+      }
+      return { success: true, outcome: 'restored', chapterNumber, draftId: entry.draftId, finalizationId, publicationStatus: 'pending' }
+    }).immediate()
+  }
+
+  /** 彻底删除回收站里的项，一个事务。已经不在回收站的原样列为 alreadyGone。收据保留，作删除证明。 */
+  static purge(deletionIds: readonly string[] | 'all'): { purged: string[]; alreadyGone: string[] } {
+    const db = requireDatabase()
+    return db.transaction(() => {
+      const ids = deletionIds === 'all'
+        ? db.prepare("SELECT DISTINCT deletion_id FROM drafts_all WHERE status = 'deleted' ORDER BY deletion_id").pluck().all() as string[]
+        : [...new Set(deletionIds)]
+      const purged: string[] = []
+      const alreadyGone: string[] = []
+      const runsOf = db.prepare(`
+        SELECT id FROM post_process_runs WHERE trigger_source_type = 'chapter_finalize' AND trigger_source_id = ? ORDER BY id
+      `).pluck()
+      for (const deletionId of ids) {
+        const rows = db.prepare(`${TRASH_ROWS_SQL} AND d.deletion_id = ? ORDER BY d.id`).all(deletionId) as TrashRow[]
+        if (rows.length === 0) { alreadyGone.push(deletionId); continue }
+        for (const row of rows) {
+          deleteDraftFacts(db, row.id, row.content_id,
+            row.finalization_id ? runsOf.all(`finalization:${row.finalization_id}`) as string[] : [])
+        }
+        purged.push(deletionId)
+      }
+      return { purged, alreadyGone }
+    }).immediate()
   }
 
   static get(operationId: string): ChapterDeletionOperation | null {

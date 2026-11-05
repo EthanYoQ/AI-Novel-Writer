@@ -89,6 +89,18 @@ function resolveStoredManuscriptTarget(projectRoot: string, targetFileName: stri
   return containedDirectChild(projectRoot, targetFileName)
 }
 
+/**
+ * 重新发布一份已冻结目标的定稿（从回收站恢复）。目标空着或已是同一内容就沿用；作者在删除后放了同名的
+ * 其他文件时换一个不撞名的目标，否则发布永远因 MANUSCRIPT_TARGET_CONFLICT 失败。
+ */
+export function republishTarget(input: PublishManuscriptInput & { finalizationId: string }): string {
+  const stored = resolveStoredManuscriptTarget(input.projectRoot, input.targetFileName)
+  if (!fs.existsSync(stored.absolutePath) || fs.readFileSync(stored.absolutePath, 'utf8') === serializeManuscript(input)) {
+    return stored.fileName
+  }
+  return resolveManuscriptTarget(input).fileName
+}
+
 export function serializeManuscript(input: Omit<PublishManuscriptInput, 'projectRoot' | 'targetFileName'>): string {
   const title = sanitizeWindowsFileNamePart(input.chapterTitle)
   const header = title
