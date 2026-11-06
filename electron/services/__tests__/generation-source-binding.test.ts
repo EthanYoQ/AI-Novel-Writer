@@ -672,3 +672,39 @@ it('leaves a draft superseded by a newer reviewed version out of the continuity 
     f.db.exec("UPDATE contents SET body='改过的第二版' WHERE id=4");
     expect(f.build().binding.contextSnapshotId).not.toBe(before.binding.contextSnapshotId);
 });
+describe('local model file paths as model names (#594)', () => {
+    const pathNames = [
+        ['D:\\models\\qwen.gguf', 'qwen.gguf'],
+        ['\\\\server\\share\\m.gguf', 'm.gguf'],
+        ['file:///Users/x/model.gguf', 'model.gguf'],
+    ] as const;
+    it.each(pathNames)('records only the file name of %s', (modelName, fileName) => {
+        const f = fixture();
+        f.input.modelReceipt = { ...f.input.modelReceipt, modelName };
+        const { binding } = f.build();
+        expect((binding.sourceManifest.modelReceipt as { modelName: string }).modelName).toBe(fileName);
+        expect(JSON.stringify(binding)).not.toMatch(/models|server|share|Users|file:/);
+    });
+    it.each(pathNames)('rebuilds %s from the stored receipt and from a fresh one to the same binding', modelName => {
+        const f = fixture();
+        f.input.modelReceipt = { ...f.input.modelReceipt, modelName };
+        const first = f.build().binding;
+        expect(rebuildGenerationSourceBinding(f.deps, first, first.epoch).binding).toEqual(first);
+        expect(rebuildGenerationSourceBinding(f.deps, first, first.epoch, f.input.modelReceipt).binding).toEqual(first);
+    });
+    it.each(['synthetic', 'Qwen/Qwen3.8-27B', 'Pro/deepseek-ai/DeepSeek-V4-Flash', 'qwen2.5:7b'])('keeps the provider model id %s unchanged', modelName => {
+        const f = fixture();
+        f.input.modelReceipt = { ...f.input.modelReceipt, modelName };
+        expect((f.build().binding.sourceManifest.modelReceipt as { modelName: string }).modelName).toBe(modelName);
+    });
+    it.each<[string, (f: ReturnType<typeof fixture>) => void]>([
+        ['provider', f => { f.input.modelReceipt = { ...f.input.modelReceipt, provider: 'D:\\models\\provider' as typeof f.input.modelReceipt.provider }; }],
+        ['capability evidence', f => { f.input.modelReceipt = { ...f.input.modelReceipt, capabilityEvidence: { ...f.input.modelReceipt.capabilityEvidence, subjectFingerprint: '\\\\server\\share' } }; }],
+        ['policy', f => { f.input.policy = { source: 'file:///Users/x/policy.json' }; }],
+        ['output contract', f => { f.input.outputContract = 'C:/private/contract'; }],
+    ])('still rejects a local path in the %s metadata', (_field, mutate) => {
+        const f = fixture();
+        mutate(f);
+        expect(() => f.build()).toThrow('GENERATION_METADATA_PRIVATE_PATH');
+    });
+});

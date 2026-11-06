@@ -3461,3 +3461,31 @@ describe('大纲恢复稿是否已写进正式大纲', () => {
     expect(f.owner.listRecovery().planning.map(item => item.handle.runId)).toEqual(save ? [] : [run.handle.runId])
   })
 })
+
+// llama-server 不加 --alias 时模型列表里的 id 就是 -m 给的模型文件路径（#594）。
+describe('local model file path as the model name', () => {
+  it.each([
+    ['D:\\models\\qwen.gguf', 'qwen.gguf'],
+    ['\\\\server\\share\\m.gguf', 'm.gguf'],
+    ['file:///Users/x/model.gguf', 'model.gguf'],
+  ])('generates with %s sent as is and records only %s', async (modelName, fileName) => {
+    const sent: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      sent.push(JSON.parse(String(init.body)).model)
+      return { ok: true, body: new ReadableStream({ start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: '正文。' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`))
+        controller.close()
+      } }) }
+    }))
+    const f = fixture()
+    Object.assign(f.model, { provider: 'custom', baseUrl: 'http://127.0.0.1:8080/v1', modelName })
+    const run = f.owner.begin(f.begin)
+    expect((await f.owner.execute({ handle: run.handle, invocationNonce: 'first', task })).outcome).toMatchObject({ status: 'completed', content: '正文。' })
+    const owner = f.reopen(), resumed = await owner.resume(run.handle)
+    expect((await owner.execute({ handle: resumed.handle, invocationNonce: 'second', task })).outcome).toMatchObject({ status: 'completed' })
+    expect(sent).toEqual([modelName, modelName])
+    const stored = f.db.prepare('SELECT binding_json FROM generation_runs').pluck().all() as string[]
+    expect(stored.map(json => JSON.parse(json).sourceManifest.modelReceipt.modelName)).toEqual(stored.map(() => fileName))
+    expect(stored.join('')).not.toMatch(/models|server|share|Users|file:/)
+  })
+})
