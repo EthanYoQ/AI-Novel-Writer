@@ -21,13 +21,14 @@ import type { PrepareReviewRevisionRequest } from '../../../src/shared/review-re
 import { selectFrozenReviewRevisionMaterials } from '../../../src/services/workflows/commands/review-revision-materials';
 import { FinalizationRepository } from '../../repositories/finalization-repository';
 import { createProjectArchiveRoundtripFixture } from '../../../test/desktop/project-archive.fixture';
+import { WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS } from '../../../test/helpers/windows-runner-io-stall';
 import { reopenWithContent } from '../../../test/helpers/reopened-draft';
 import { LEGACY_INSTALLED_SKILL_CASES, masterInspectWritingSkillMarkdown, plantLegacyInstalledSkill } from '../../../test/helpers/installed-writing-skill-fixture';
 import { WRITING_SKILL_BUNDLE_MANIFEST, writingSkillBundleManifest } from '../writing-skill-package';
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3');
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0))
-    cleanup(); });
+    cleanup(); }, WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS);
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 it('graph candidates bind the actual blueprint and fixed main task across sessions without self-conflicting on confirmed plans', () => {
     const f = fixture();
@@ -143,8 +144,7 @@ describe('main rebuilt generation sources', () => {
         expect(f.db.prepare("SELECT * FROM characters WHERE character_id='character-proved'").get()).toEqual(stored);
     });
 
-    describe('restored 20-chapter archive roundtrip', { timeout: 20_000 }, () => {
-        // Match the shared 20-chapter archive fixture's native I/O budget in project-archive-service.test.ts.
+    describe('restored 20-chapter archive roundtrip', { timeout: WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS }, () => {
         it('keeps downstream derived states in generation materials after an earlier chapter is replaced', async () => {
             const f = await createProjectArchiveRoundtripFixture();
             cleanups.push(f.dispose);
