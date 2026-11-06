@@ -19,13 +19,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest"><img src="https://img.shields.io/badge/Download-Windows%20%7C%20macOS-2b4c8c?style=for-the-badge" alt="Download for Windows and macOS" /></a><br />
+  <a href="https://github.com/EthanYoQ/Pagekin/releases/latest"><img src="https://img.shields.io/badge/Download-Windows%20%7C%20macOS-2b4c8c?style=for-the-badge" alt="Download for Windows and macOS" /></a><br />
   <a href="https://www.orz.md/en/ai-novel-writer/#demo">English first-use guide with real screenshots</a><br />
   <sub>Manual project setup. Bring your own local or cloud model.</sub>
 </p>
 
 <p align="center">
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases"><img src="https://badgen.net/github/tag/EthanYoQ/AI-Novel-Writer?label=release" alt="Release" /></a>
+  <a href="https://github.com/EthanYoQ/Pagekin/releases"><img src="https://badgen.net/github/tag/EthanYoQ/AI-Novel-Writer?label=release" alt="Release" /></a>
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/blob/master/LICENSE"><img src="https://badgen.net/badge/license/GPL-3.0/blue" alt="GPL-3.0 License" /></a>
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/stargazers"><img src="https://badgen.net/github/stars/EthanYoQ/AI-Novel-Writer" alt="GitHub stars" /></a>
 </p>
@@ -42,7 +42,7 @@
 > - Every generation run is shown in one run sheet, where you can cancel, pause a batch, or confirm continuation.
 > - Appearance offers light and dark only. The assistant chat entry is hidden for now and will return separately.
 >
-> See the [1.3.0 release notes](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v1.3.0) for details.
+> See the [1.3.0 release notes](https://github.com/EthanYoQ/Pagekin/releases/tag/v1.3.0) for details.
 
 ## What it does
 
@@ -155,7 +155,7 @@ Embedding models also use the `/v1` address. Do not use `http://127.0.0.1:11434/
 
 ## Download and install
 
-Download official installers only from [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest).
+Download official installers only from [GitHub Releases](https://github.com/EthanYoQ/Pagekin/releases/latest).
 
 ### Windows x64
 
