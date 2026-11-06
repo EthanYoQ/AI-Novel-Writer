@@ -4,6 +4,7 @@ import type { TrashedChapter } from '../../../shared/chapter-deletion'
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import { displayedErrorMessage } from '../../../i18n/app-errors'
 import { pluralEn } from '../../../shared/plural-en'
+import { sqliteTime } from '../../../shared/sqlite-time'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { captureProjectSession } from '../../project-session-gate'
@@ -33,7 +34,7 @@ function TrashItem({ entry, busy, onRun, onPurge }: {
 }) {
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
-  const deletedAt = new Date(entry.deletedAt)
+  const deletedAt = sqliteTime(entry.deletedAt)
   const when = Number.isNaN(deletedAt.getTime()) ? entry.deletedAt : deletedAt.toLocaleString(locale, { dateStyle: 'medium', timeStyle: 'short' })
   const words = entry.wordCount.toLocaleString(locale)
   const cleanupUnfinished = entry.cleanup !== 'completed'
