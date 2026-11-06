@@ -1,4 +1,3 @@
-// #593 实机场景：知识库「导入创作资料」选中一个不是 UTF-8 的文本文件，提示说编码和办法，不说授权。
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
 import fs from 'node:fs'

@@ -9,7 +9,6 @@ function codesIn(files: string[], pattern: RegExp): string[] {
   return [...codes].sort()
 }
 
-/** 安全文件层（Windows helper、macOS helper 与 TS 外壳）能交出的全部 SECURE_FS_* 码，按源码扫出，新增码自动纳入。 */
 export function secureFileSystemCodes(): string[] {
   const directory = path.resolve('electron/security')
   const files = fs.readdirSync(directory)
@@ -18,12 +17,10 @@ export function secureFileSystemCodes(): string[] {
   return codesIn(files, /SECURE_FS_[A-Z0-9_]+/g)
 }
 
-/** 授权服务能抛出的全部 EXTERNAL_FILE_GRANT_* 码。 */
 export function externalFileGrantCodes(): string[] {
   return codesIn([path.resolve('electron/services/external-file-grant-service.ts')], /EXTERNAL_FILE_GRANT_[A-Z0-9_]+/g)
 }
 
-/** 授权已通过、读文件才失败时作者看到的说明（#593，中文界面）。 */
 export const READ_FAILURE_TEXT = {
   SECURE_FS_INVALID_TEXT: '这个文件不是 UTF-8 编码的文本。请用文本编辑器另存为 UTF-8 后重新导入。',
   SECURE_FS_FILE_TOO_LARGE: '这个文件太大，读不进来。请拆成几个小文件后重新导入。',

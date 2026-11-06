@@ -21,7 +21,6 @@ const UNREADABLE = [
   'Could not read the selected files. Please choose them again.',
 ] as const
 
-/** 授权已经通过、读外部文件才失败时的说明（#593）：说读文件的原因，不说授权。 */
 export function externalFileReadFailureText(error: unknown): string {
   const code = error instanceof Error ? error.message : String(error)
   const [zhCN, enUS] = Object.hasOwn(READ_FAILURES, code) ? READ_FAILURES[code] : UNREADABLE
