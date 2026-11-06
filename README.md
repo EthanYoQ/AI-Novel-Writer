@@ -13,7 +13,7 @@
 <p align="center"><sub>原名「AI 小说作家 / AI Novel Writer」</sub></p>
 
 <p align="center">
-  <strong>开源免费的 AI 小说写作桌面软件，为长篇小说和网文连载设计。</strong><br />
+  <strong>Pagekin，免费 AI 小说写作软件</strong><br />
   从设定、架构、章节蓝图到正文、审稿、修稿、定稿，一章一章把书写完；也能拆解参考小说来仿写、导入原稿接着续写，或按你的要求改写。<br />
   本地优先：作品存在你自己的电脑上。软件不带模型：接你自己的 API Key，或用 Ollama 跑本地模型。
 </p>
