@@ -676,6 +676,7 @@ describe('local model file paths as model names (#594)', () => {
     const pathNames = [
         ['D:\\models\\qwen.gguf', 'qwen.gguf'],
         ['\\\\server\\share\\m.gguf', 'm.gguf'],
+        ['//server/share/m.gguf', 'm.gguf'],
         ['file:///Users/x/model.gguf', 'model.gguf'],
     ] as const;
     it.each(pathNames)('records only the file name of %s', (modelName, fileName) => {
