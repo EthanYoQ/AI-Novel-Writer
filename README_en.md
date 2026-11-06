@@ -18,6 +18,8 @@
   Local-first: your books stay on your own computer. No model is bundled: use your own API key, or run a local model with Ollama.
 </p>
 
+Pagekin is maintained by EthanYoQ. The [official website](https://www.orz.md/en/ai-novel-writer/) provides the product overview, setup guide and official download links.
+
 <p align="center">
   <a href="https://github.com/EthanYoQ/Pagekin/releases/latest"><img src="https://img.shields.io/badge/Download-Windows%20%7C%20macOS-2b4c8c?style=for-the-badge" alt="Download for Windows and macOS" /></a><br />
   <a href="https://www.orz.md/en/ai-novel-writer/#demo">English first-use guide with real screenshots</a><br />

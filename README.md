@@ -18,6 +18,8 @@
   本地优先：作品存在你自己的电脑上。软件不带模型：接你自己的 API Key，或用 Ollama 跑本地模型。
 </p>
 
+书童 Pagekin 由 EthanYoQ 维护。[官方主页](https://www.orz.md/ai-novel-writer/)提供产品介绍、使用指南和正式下载入口。
+
 <p align="center">
   <a href="https://github.com/EthanYoQ/Pagekin/releases/latest"><img src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD-Windows%20%7C%20macOS-2b4c8c?style=for-the-badge" alt="下载 Windows 与 macOS 安装包" /></a><br />
   <a href="https://www.orz.md/ai-novel-writer/demo/">观看 32 秒中文实录：选段续写与改成对话</a><br />
