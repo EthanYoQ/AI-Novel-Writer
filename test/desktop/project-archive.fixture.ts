@@ -42,13 +42,6 @@ const EARLIER_DERIVED_STATE = '第一章留下雨城地图'
 const SECRET = 'sk-roundtrip-never-export'
 const MACHINE_PATH = String.raw`C:\Users\writer\.secrets\model.json`
 
-/**
- * 用这个夹具的用例和清理它的钩子共用这个时限。夹具真实建库、跑迁移、写知识库，再导出并恢复成第二个项目，
- * 在 CI 上通常 1.2 到 3.4 秒。托管 Windows runner 偶发 20 秒以上的磁盘卡顿：#582 的 run 41891824229 里一条用例
- * 超过 20 秒被杀，#592 的 run 42073849329 里一次卡顿跨两条用例约 25 秒。60 秒约是一次卡顿加正常耗时的两倍。
- */
-export const PROJECT_ARCHIVE_ROUNDTRIP_TIMEOUT_MS = 60_000
-
 export interface ProjectArchiveRoundtripFixture {
   readonly base: string
   readonly sourceRoot: string

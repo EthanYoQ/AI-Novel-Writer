@@ -27,7 +27,8 @@ import {
   type PortableAssetSnapshot,
   type PortableProvidedFile,
 } from '../project-archive-service'
-import { createProjectArchiveRoundtripFixture, PROJECT_ARCHIVE_ROUNDTRIP_TIMEOUT_MS } from '../../../test/desktop/project-archive.fixture'
+import { createProjectArchiveRoundtripFixture } from '../../../test/desktop/project-archive.fixture'
+import { WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS } from '../../../test/helpers/windows-runner-io-stall'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
@@ -518,7 +519,7 @@ describe('portable project export service', { timeout: 20_000 }, () => {
     expect(fs.existsSync(f.target)).toBe(false)
   })
 
-  it('exports the shared 20-chapter corpus with authority, assets and frozen runtime history', { timeout: PROJECT_ARCHIVE_ROUNDTRIP_TIMEOUT_MS }, async () => {
+  it('exports the shared 20-chapter corpus with authority, assets and frozen runtime history', { timeout: WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS }, async () => {
     const f = await createProjectArchiveRoundtripFixture()
     try {
       const sourceBefore = fs.readFileSync(f.sourceDatabasePath)

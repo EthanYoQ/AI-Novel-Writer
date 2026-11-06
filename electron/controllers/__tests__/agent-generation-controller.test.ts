@@ -22,6 +22,7 @@ import { registerDatabaseController } from '../db-controller'
 import { ModelExecutionLeaseRegistry } from '../../services/model-execution-lease'
 import { projectAccess } from '../../services/project-access'
 import { createProjectDatabase, initProjectDatabase, closeProjectDatabase, getProjectDb } from '../../database'
+import { WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS } from '../../../test/helpers/windows-runner-io-stall'
 
 const base = path.join(os.tmpdir(), 'an-agent-ipc-')
 const model: ModelProfile = { id: 'synthetic-ipc', name: 'Synthetic IPC', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1',
@@ -66,11 +67,6 @@ async function workflow() {
     parentRootActionId: f.recovery.handle.rootActionId, agentWorkflowRegistrationId: registration.registrationId }
   return { ...f, registration, selection }
 }
-
-// 每条用例在 beforeEach 里真实建项目、建库跑迁移，afterEach 里关库删目录，CI 上一条通常 0.3 到 2 秒。
-// 托管 Windows runner 偶发磁盘卡顿：#592 的 run 42073849329 里一次卡顿约 25 秒，跨一条用例（15.9 秒）和下一条的
-// beforeEach（超过 10 秒被判超时）。用例和钩子一起放到 60 秒，约是一次卡顿加正常耗时的两倍。
-const WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS = 60_000
 
 beforeAll(() => {
   registerGenerationController({ modelExecutionLeases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, applyProxyConfig: () => {} })

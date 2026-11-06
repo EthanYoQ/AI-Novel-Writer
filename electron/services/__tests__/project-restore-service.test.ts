@@ -35,7 +35,8 @@ import { FinalizationRepository } from '../../repositories/finalization-reposito
 import { ChapterDeletionService } from '../chapter-deletion-service'
 import { readPortableCurrentAuthority } from '../portable-current-authority'
 import { readPortableRuntimeFreeze } from '../portable-runtime-freeze'
-import { createProjectArchiveRoundtripFixture, PROJECT_ARCHIVE_ROUNDTRIP_TIMEOUT_MS } from '../../../test/desktop/project-archive.fixture'
+import { createProjectArchiveRoundtripFixture } from '../../../test/desktop/project-archive.fixture'
+import { WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS } from '../../../test/helpers/windows-runner-io-stall'
 import { readDocumentCopy } from '../../knowledge-base'
 import { captureGenerationKnowledge } from '../generation-knowledge-source'
 import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
@@ -420,7 +421,7 @@ describe('portable project restore service', { timeout: 20_000 }, () => {
     }
   })
 
-  it('restores the shared 20-chapter corpus under a new identity with exact authored assets and frozen history', { timeout: PROJECT_ARCHIVE_ROUNDTRIP_TIMEOUT_MS }, async () => {
+  it('restores the shared 20-chapter corpus under a new identity with exact authored assets and frozen history', { timeout: WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS }, async () => {
     const f = await createProjectArchiveRoundtripFixture()
     try {
       await f.exportAndRestore()
