@@ -1,4 +1,3 @@
-/* global process */
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
 import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'

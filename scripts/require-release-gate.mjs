@@ -1,5 +1,3 @@
-/* eslint-env node */
-
 const expectedContext = 'release-win-verify'
 
 if (process.env.AI_NOVEL_RELEASE_GATE !== expectedContext) {

@@ -1,5 +1,3 @@
-/* eslint-env node */
-
 import { Buffer } from 'node:buffer'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'

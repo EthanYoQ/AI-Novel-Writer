@@ -1,4 +1,3 @@
-/* global process, console */
 // 颜色只能来自一层令牌（design-system.md 第 6 条）。扫描 src/components 与纸墨样式目录里的十六进制、rgb、hsl 字面量，
 // 除令牌文件与测试外一律不许有：没有允许清单。
 

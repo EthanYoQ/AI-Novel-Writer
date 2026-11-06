@@ -1,5 +1,3 @@
-/* eslint-env node */
-
 import { execFileSync, spawn } from 'node:child_process'
 import {
   appendFileSync,

@@ -1,4 +1,3 @@
-/* global process */
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'

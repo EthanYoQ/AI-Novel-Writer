@@ -1,4 +1,3 @@
-/* global Buffer, process */
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
