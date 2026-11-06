@@ -1,5 +1,7 @@
 # 旧外壳基线场景
 
+> 历史说明：本文件按当时的改造或 issue 记录场景与对照步骤，不随当前构建更新。其中的对照命令（旧外壳场景、`--shell`、指向 trunk 的 `--app-root`）只适用于当时的 trunk，在当前构建上不能照抄。当前构建的做法以正文和 `driver.md` 为准；某个场景现在能不能对 head 跑，以 `driver.md`「RD-10 删除旧外壳之后」的分类为准。
+
 RD-10 之前的旧外壳场景，只对 trunk（`--app-root`）跑。做旧外壳对照或改 `scenarios.mjs` 时读。
 
 ## 场景
@@ -49,4 +51,4 @@ RD-10 之前的旧外壳场景，只对 trunk（`--app-root`）跑。做旧外�
 
 `nav-` 场景对 trunk（`--app-root`）与 head 各跑一次，两边都通过即行为一致。`write-latency` 与 `startup-timing` 一样交替各跑 5 次取中位数。
 
-上面这段和 `settings-appearance` 的「head 比 trunk 多」都是 RD-10 之前的做法。RD-10 起 head 没有旧外壳，`nav-*`、`write-latency`、`settings-appearance` 对 head 跑必然失败：它们只对 trunk 跑，head 一侧改跑对应的纸墨外壳场景（设置类用 `stage-settings-*`，其余按页面在 `rd-stage-scenarios.md` 里找），分类见 `driver.md`「RD-10 删除旧外壳之后」。
+上面这段和 `settings-appearance` 的「head 比 trunk 多」都是 RD-10 之前的做法。RD-10 起 head 没有旧外壳，`nav-*`、`write-latency`、`settings-appearance` 对 head 跑必然失败：它们只对 trunk 跑，head 一侧改跑对应的纸墨外壳场景（设置类用 `stage-settings-*`，其余按页面在 `rd-stage-scenarios.md` 里找），分类见 `driver.md`「RD-10 删除旧外壳之后」。当前构建没有等价的 `writeToOutputMs` 测量，`write-latency` 的 trunk 与 head 对比不可用；`write-stream` 测的是流式出字，不是同一指标。

@@ -37,7 +37,7 @@ fnm exec --using=22.23.1 -- pnpm build
 fnm exec --using=22.23.1 -- node scripts/redesign/drive.mjs --scenario <名称> [--theme light|dark] [--out <目录>] [--dump-dom] [--console] [--video] [--app-root <目录>] [--shell writer|stage] [--real-model]
 ```
 
-- 参考文件里的 `node …`、`pnpm verify:drive …` 命令都省略了 `fnm exec --using=22.23.1 --` 前缀，运行时照上面这条补上。
+- 参考文件里的命令都省略了前缀，运行时补上：`node …` 前加 `fnm exec --using=22.23.1 --`；`pnpm …` 在 Windows 的 Git Bash 里加 `fnm exec --using=22.23.1 -- cmd //c`（`fnm exec` 找不到 `pnpm.cmd`，直接写 `pnpm` 会报 program not found），macOS 加 `fnm exec --using=22.23.1 --`。
 - 不带参数运行会打印全部场景名，退出码 2。场景定义在 `scripts/redesign/*-scenarios.mjs`。
 - `--theme` 默认 `light`（浅色），`dark` 为深色。界面类改动浅色、深色各截一次。
 - `--out` 默认 `.runtime/redesign-baseline/`。batch 线按任务书指定的截图目录传。

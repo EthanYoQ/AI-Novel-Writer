@@ -1,6 +1,6 @@
 # 驱动、输出与只读诊断（完整说明）
 
-正文只列常用部分。要查某个参数的细节、结果 JSON 的每个字段、会话结束时的三项检查，或者要改驱动和页面对象时，读这份。安装与构建命令以正文「启动前」为准（用 fnm 的 Node 22.23.1）。本文的 `node`、`pnpm` 命令都省略了 `fnm exec --using=22.23.1 --` 前缀，运行时照正文「命令」补上。
+正文只列常用部分。要查某个参数的细节、结果 JSON 的每个字段、会话结束时的三项检查，或者要改驱动和页面对象时，读这份。安装与构建命令以正文「启动前」为准（用 fnm 的 Node 22.23.1）。本文的 `node`、`pnpm` 命令都省略了 fnm 前缀，运行时照正文「命令」补上（Windows 上 `pnpm` 要经 `cmd //c`）。
 
 驱动脚本是 `scripts/redesign/drive.mjs`。它用 Playwright 的 `_electron` 启动当前工作树的构建产物（`electron .`），每个会话（一次冷启动）一个全新的隔离目录，模型调用全部走本机假服务，不调用真实模型。单跑一个场景就是只含这个场景的会话。
 
@@ -64,10 +64,14 @@ RD-10 删除旧外壳之后，场景分三类：
 ## 只读诊断
 
 ```bash
-node scripts/redesign/drive.mjs --scenario open-sample --dump-dom --console --out <目录>
+node scripts/redesign/drive.mjs --scenario stage-open-sample --dump-dom --console --out <目录>
 ```
 
-`open-sample` 是旧外壳基线场景，只对 trunk（`--app-root`）跑；诊断当前构建换成 `stage-open-sample`，其余参数不变。
+历史写法（RD-10 之前，`open-sample` 是旧外壳基线场景，现在只能加 `--app-root` 指向当时的 trunk 跑）：
+
+```bash
+node scripts/redesign/drive.mjs --scenario open-sample --dump-dom --console --out <目录>
+```
 
 - `--dump-dom` 在每个截图点截图后写 `<场景>-<主题>.dom.html`（`page.content()`）和 `.aria.yml`（Playwright 无障碍快照）。改页面对象前先看 `.aria.yml`，选择器优先用其中的角色与可访问名称。
 - `--console` 每个会话写一份 `<会话>-<主题>.console.log`（单跑时会话名就是场景名，`baseline-all` 为 `baseline-shelf`、`baseline-sample`）：渲染进程控制台、页面异常、主进程 stdout/stderr，以及假模型每次请求的分类（`[fake-model] prose|review|revision|character-state|embedding`）。
@@ -76,6 +80,12 @@ node scripts/redesign/drive.mjs --scenario open-sample --dump-dom --console --ou
 
 类名选择器只出现在 `scripts/redesign/pages/`，按任务域分文件：`shell`（启动、外壳就绪、标题栏、状态栏、左右栏与可收起面板）、`bookshelf`（旧外壳书房与两种外壳的新建作品）、`project`（项目树）、`chapter`（单章写作、审稿、修稿合并、定稿）、`run-panel`（运行面板）、`settings`（设置，含外观里切换界面布局）、`materials`（知识库与角色卡导入）、`stage`（新外壳：流程脊、章节列表、标签条、Ctrl K 与 Ctrl P、保存状态、沉浸写作、书房）、`run-sheet`（新外壳的运行侧页）。`shell.waitForShell` 对两种外壳都成立。外壳替换后只改这些页面对象，场景 `scripts/redesign/scenarios.mjs` 不动。
 
-`/.claude/` 在 `.gitignore` 里，提交本文件的改动要用 `git add -f .claude/skills/verify/SKILL.md`（或 `git add -u`）。假模型在 `scripts/redesign/fake-model.mjs`，按提示词特征返回正文、短细纲（与正文同一段文字，但不参与定速流出）、审稿 JSON、修稿正文、角色状态 JSON 或角色提取 JSON。
+假模型在 `scripts/redesign/fake-model.mjs`，按提示词特征返回正文、短细纲（与正文同一段文字，但不参与定速流出）、审稿 JSON、修稿正文、角色状态 JSON 或角色提取 JSON。
 
-拆分后本文件在 `references/` 下，上面那条 `git add -f` 只覆盖正文。提交 skill 的任何改动都用正文「提交本 skill 的改动」里的 `git add -f .claude/skills/verify`。
+`/.claude/` 在 `.gitignore` 里，提交 skill 的任何改动（正文和 `references/`）都用 `git add -f .claude/skills/verify`。
+
+历史写法（拆分前正文里的原句，其中的 `git add -f` 只暂存正文，拆分后不要照用）：
+
+```text
+`/.claude/` 在 `.gitignore` 里，提交本文件的改动要用 `git add -f .claude/skills/verify/SKILL.md`（或 `git add -u`）。假模型在 `scripts/redesign/fake-model.mjs`，按提示词特征返回正文、短细纲（与正文同一段文字，但不参与定速流出）、审稿 JSON、修稿正文、角色状态 JSON 或角色提取 JSON。
+```

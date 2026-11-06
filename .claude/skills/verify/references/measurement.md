@@ -11,10 +11,10 @@ for i in 1 2 3; do node scripts/redesign/drive.mjs --scenario review --out shots
 node scripts/redesign/pixel-diff.mjs shots/r1/review-light.png shots/r2/review-light.png shots/r3/review-light.png
 ```
 
-上面的 `review` 是旧外壳基线场景，只对 trunk（`--app-root`）能跑。当前构建用纸墨外壳场景，并且任一次驱动退出码非 0 就停下；每次比较用新的输出目录，免得 `pixel-diff.mjs` 比到上一轮留下的旧图：
+上面是历史写法（RD-10 之前），`review` 是旧外壳基线场景，在当前构建上不能照抄。当前构建用纸墨外壳场景，并且任一次驱动退出码非 0 就停下；每次比较用新的输出目录，免得 `pixel-diff.mjs` 比到上一轮留下的旧图：
 
 ```bash
-out=.runtime/repeat-$(date +%s)
+out=$(mktemp -d)
 (for i in 1 2 3; do node scripts/redesign/drive.mjs --scenario stage-open-sample --out $out/r$i || exit 1; done
 node scripts/redesign/pixel-diff.mjs $out/r1/stage-open-sample-light.png $out/r2/stage-open-sample-light.png $out/r3/stage-open-sample-light.png)
 ```
