@@ -727,7 +727,9 @@ it('#569 请求超时把根阻断后又取消了后处理：作者重试另开�
  expect(f.owner.commitFinalizationGeneration({ handle: retry.view.handle, artifact: f.artifactOf(receipt) })).toMatchObject({ success: true, applied: 1 })
 })
 
-it('#569 根的请求次数已用完时作者重试：报出 ROOT_BUDGET_EXHAUSTED，不另开运行', async () => {
+// 要把 32 次请求的预算真实用完：11 轮 begin/execute，每轮在真实 SQLite 上建来源绑定、校验、落库，没有计时器等待。
+// 单独跑 2 到 3 秒；本机按目录并行跑时 CPU 争用，10 次里 10 次超过默认 5 秒被判超时。
+it('#569 根的请求次数已用完时作者重试：报出 ROOT_BUDGET_EXHAUSTED，不另开运行', { timeout: 20_000 }, async () => {
  const f = await splitEvidenceRun(undefined, [joined(false), joined(false), joined(false)])
  f.dispatch.mockImplementation(async (_request, options) => {
   options.onVisible({ kind: 'delta', text: JSON.stringify(joined(false)(f.characterId)) }); return { finishReason: 'stop', usage: null }
