@@ -118,8 +118,9 @@ function safeMetadata(value: unknown): void {
         }
 }
 // llama-server 不加 --alias 时模型 id 就是模型文件路径。请求照原值发，记录只留文件名，本机目录不进作品数据。
+// Windows 也认 //server/share 形式的 UNC，模型名里多认这一种。
 function recordedModelName(modelName: string): string {
-    return PRIVATE_PATH.test(modelName) ? modelName.split(/[\\/]/).filter(Boolean).pop() ?? '' : modelName;
+    return PRIVATE_PATH.test(modelName) || /^\/\//.test(modelName) ? modelName.split(/[\\/]/).filter(Boolean).pop() ?? '' : modelName;
 }
 function modelProjection(value: SafeGenerationModelReceipt): SafeGenerationModelReceipt {
     const { modelId, provider, protocol, modelName, modelRevision, endpointFingerprint, capabilityEvidence } = value;
