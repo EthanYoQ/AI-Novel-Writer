@@ -11,12 +11,20 @@ description: 在真实 Electron 里驱动书童做实机验证：截图、复现
 
 ## 启动前
 
-在要验证的工作树根目录，用 Git Bash（Bash 工具）依次运行。`cmd //c` 是 Git Bash 的写法，在 PowerShell 里它只打开一个提示符、不执行命令；在 PowerShell 里要写成 `cmd /c`。
+在要验证的工作树根目录依次运行。Windows 用 Git Bash（Bash 工具）。`cmd //c` 是 Git Bash 的写法，在 PowerShell 里它只打开一个提示符、不执行命令；在 PowerShell 里要写成 `cmd /c`。
 
 ```bash
 fnm exec --using=22.23.1 -- cmd //c pnpm install --frozen-lockfile --ignore-scripts
 fnm exec --using=22.23.1 -- node node_modules/electron/install.js
 fnm exec --using=22.23.1 -- cmd //c pnpm build
+```
+
+macOS 没有 `cmd`，在终端里直接调 `pnpm`：
+
+```bash
+fnm exec --using=22.23.1 -- pnpm install --frozen-lockfile --ignore-scripts
+fnm exec --using=22.23.1 -- node node_modules/electron/install.js
+fnm exec --using=22.23.1 -- pnpm build
 ```
 
 - 驱动直接 import 应用里的 `.ts`，要 Node 自带的类型剥离。本机默认 Node 不一定满足，统一用 fnm 的 22.23.1 跑驱动。版本不对时驱动报错并给出这条命令。
