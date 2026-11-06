@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { page } from 'vitest/browser'
+import { cdp, page } from 'vitest/browser'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
@@ -134,6 +134,21 @@ describe('回收站对话框（#564）', () => {
     expect(broken.textContent).not.toContain('CHAPTER_TRASH_ENTRY_INVALID')
     await expect.element(dialog()).toHaveTextContent('随备份和导出一起带走')
     await expect.element(dialog().getByRole('button', { name: '清空回收站…' })).toBeEnabled()
+  })
+
+  it('删除时间按作者所在时区显示：库里记的 UTC 2026-11-05 23:30 在东八区是 11 月 6 日 07:30', async () => {
+    await cdp().send('Emulation.setTimezoneOverride', { timezoneId: 'Asia/Shanghai' })
+    try {
+      expect(new Date(2026, 10, 6).getTimezoneOffset()).toBe(-480)
+      entries = [entry(3, { deletedAt: '2026-11-05 23:30:00' })]
+      await render()
+      await expect.element(dialog()).toHaveAccessibleName('回收站（2）')
+      const meta = item('第 3 章').querySelector('.stage-trash-meta')!.textContent
+      expect(meta).toContain('11月6日')
+      expect(meta).toContain('07:30')
+    } finally {
+      await cdp().send('Emulation.setTimezoneOverride', { timezoneId: '' })
+    }
   })
 
   it('恢复按列表给的方式发请求，成功后说明恢复了什么并提醒软件外改过的 txt 留着，回收站随即重读', async () => {
