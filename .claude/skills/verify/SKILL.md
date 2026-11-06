@@ -11,7 +11,7 @@ description: 在真实 Electron 里驱动书童做实机验证：截图、复现
 
 ## 启动前
 
-在要验证的工作树根目录依次运行：
+在要验证的工作树根目录，用 Git Bash（Bash 工具）依次运行。`cmd //c` 是 Git Bash 的写法，在 PowerShell 里它只打开一个提示符、不执行命令；在 PowerShell 里要写成 `cmd /c`。
 
 ```bash
 fnm exec --using=22.23.1 -- cmd //c pnpm install --frozen-lockfile --ignore-scripts
