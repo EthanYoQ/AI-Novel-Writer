@@ -15,8 +15,8 @@ node scripts/redesign/pixel-diff.mjs shots/r1/review-light.png shots/r2/review-l
 
 ```bash
 out=$(mktemp -d)
-(for i in 1 2 3; do node scripts/redesign/drive.mjs --scenario stage-open-sample --out $out/r$i || exit 1; done
-node scripts/redesign/pixel-diff.mjs $out/r1/stage-open-sample-light.png $out/r2/stage-open-sample-light.png $out/r3/stage-open-sample-light.png)
+(for i in 1 2 3; do node scripts/redesign/drive.mjs --scenario stage-open-sample --out "$out/r$i" || exit 1; done
+node scripts/redesign/pixel-diff.mjs "$out/r1/stage-open-sample-light.png" "$out/r2/stage-open-sample-light.png" "$out/r3/stage-open-sample-light.png")
 ```
 
 `pixel-diff.mjs` 输出各张相对第一张的不同像素占比，`maxRatio` 小于 0.005 时退出码 0，否则 1。尺寸与第一张不同的图记为全部不同（`ratio` 为 1），`reason` 写明两边尺寸。任一通道差值超过 2 级才算不同像素（`ratio`），因为同一状态连续截图时，渲染器在背景模糊和渐变上偶发全屏 ±1～2 级抖动；逐字节比较的结果另列为 `strictRatio`，供判断差异是不是这种抖动。
