@@ -67,6 +67,11 @@ async function workflow() {
   return { ...f, registration, selection }
 }
 
+// 每条用例在 beforeEach 里真实建项目、建库跑迁移，afterEach 里关库删目录，CI 上一条通常 0.3 到 2 秒。
+// 托管 Windows runner 偶发磁盘卡顿：#592 的 run 42073849329 里一次卡顿约 25 秒，跨一条用例（15.9 秒）和下一条的
+// beforeEach（超过 10 秒被判超时）。用例和钩子一起放到 60 秒，约是一次卡顿加正常耗时的两倍。
+const WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS = 60_000
+
 beforeAll(() => {
   registerGenerationController({ modelExecutionLeases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, applyProxyConfig: () => {} })
   registerDatabaseController()
@@ -82,16 +87,16 @@ beforeEach(() => {
   vi.stubGlobal('window', { aiNovelAPI: { invoke: (channel: string, ...args: unknown[]) => mocks.handlers.get(channel)!({ sender }, ...args) } })
   vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('No unstubbed network access is permitted') }))
   sender.send.mockClear()
-})
+}, WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS)
 afterEach(() => {
   closeProjectDatabase(); projectAccess.invalidateCurrentSession(); vi.unstubAllGlobals(); vi.restoreAllMocks()
   useProjectStore.setState({ currentProject: null })
   useWorkflowStore.setState({ activeRuns: [], history: [] })
   if (!path.resolve(root).startsWith(path.resolve(base))) throw new Error('Synthetic cleanup outside owned temp root')
   fs.rmSync(root, { recursive: true, force: true })
-})
+}, WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS)
 
-describe('Agent registered IPC, actual SQLite and intercepted provider boundary', () => {
+describe('Agent registered IPC, actual SQLite and intercepted provider boundary', { timeout: WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS }, () => {
   it.each(['generate_architecture', 'generate_blueprint'] as const)('carries frozen planning through the real %s launcher and factory into main admission', async workflow => {
     getProjectDb()!.prepare('UPDATE project_core SET premise=?').run('Synthetic established premise. '.repeat(4))
     getProjectDb()!.exec("INSERT INTO characters(name) VALUES('Mara')")
