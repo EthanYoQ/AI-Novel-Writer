@@ -122,9 +122,9 @@ function safeMetadata(value: unknown): void {
 function recordedModelName(modelName: string): string {
     return PRIVATE_PATH.test(modelName) || /^\/\//.test(modelName) ? modelName.split(/[\\/]/).filter(Boolean).pop() ?? '' : modelName;
 }
-function modelProjection(value: SafeGenerationModelReceipt): SafeGenerationModelReceipt {
+function modelProjection(value: SafeGenerationModelReceipt, verbatimModelName: boolean): SafeGenerationModelReceipt {
     const { modelId, provider, protocol, modelName, modelRevision, endpointFingerprint, capabilityEvidence } = value;
-    const safe = { modelId, provider, protocol, modelName: recordedModelName(modelName), modelRevision, endpointFingerprint, capabilityEvidence };
+    const safe = { modelId, provider, protocol, modelName: verbatimModelName ? modelName : recordedModelName(modelName), modelRevision, endpointFingerprint, capabilityEvidence };
     safeMetadata(safe);
     if (!modelId || !modelRevision || !endpointFingerprint || !capabilityEvidence)
         fail('GENERATION_MODEL_RECEIPT_INVALID');
@@ -283,7 +283,7 @@ function freezeMaterialDecision(value: unknown): MaterialDecisionReceipt {
     safeMetadata(frozen);
     return JSON.parse(stable(frozen));
 }
-export function buildGenerationSourceBinding(deps: GenerationSourceBindingDependencies, input: GenerationSourceBindingInput): GenerationSourceBindingResult {
+export function buildGenerationSourceBinding(deps: GenerationSourceBindingDependencies, input: GenerationSourceBindingInput, verbatimModelName = false): GenerationSourceBindingResult {
     if (!deps.db.open || !input.projectId || !input.epoch || !input.operation)
         fail('GENERATION_SOURCE_BINDING_INVALID');
     if (!Array.isArray(input.promptKeys) || input.promptKeys.length === 0)
@@ -312,7 +312,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     if (input.promptKeys.some(key => !/^[A-Za-z0-9_-]{1,128}$/.test(key)) || input.skillStages.some(stage => !WRITING_SKILL_STAGES.includes(stage)))
         fail('GENERATION_ASSET_ID_INVALID');
     const dataVersion = deps.db.pragma('data_version', { simple: true }), changes = deps.db.prepare('SELECT total_changes()').pluck().get();
-    const modelReceipt = modelProjection(input.modelReceipt);
+    const modelReceipt = modelProjection(input.modelReceipt, verbatimModelName);
     const materialDecision = input.materialDecision === undefined ? undefined : freezeMaterialDecision(input.materialDecision);
     if (materialDecision && !['chapter-draft', 'review-chapter', 'refine-draft', 'refine-from-review'].includes(input.operation))
         fail('GENERATION_MATERIAL_DECISION_INVALID');
@@ -623,7 +623,10 @@ export function rebuildGenerationSourceBinding(deps: GenerationSourceBindingDepe
     };
     if (manifest.version !== 1)
         fail('GENERATION_SOURCE_MANIFEST_INVALID');
-    return buildGenerationSourceBinding(deps, { ...manifest, projectId: previous.projectId, epoch: nextEpoch, modelReceipt: modelReceipt ?? manifest.modelReceipt, policy: policy ?? manifest.policy, outputContract: outputContract ?? manifest.outputContract });
+    const receipt = modelReceipt ?? manifest.modelReceipt;
+    // 升级前开跑的运行把 //server/share 形式的模型名原样存进了记录。模型没换时沿用原值，重建出的指纹才对得上。
+    return buildGenerationSourceBinding(deps, { ...manifest, projectId: previous.projectId, epoch: nextEpoch, modelReceipt: receipt, policy: policy ?? manifest.policy, outputContract: outputContract ?? manifest.outputContract },
+        receipt.modelName === manifest.modelReceipt?.modelName);
 }
 export function compareGenerationSourceBindings(previous: RunBinding, next: RunBinding): boolean {
     return previous.projectId === next.projectId && isDeepStrictEqual(previous.fingerprint, next.fingerprint) && previous.contextSnapshotId === next.contextSnapshotId && isDeepStrictEqual(previous.sourceManifest, next.sourceManifest)
