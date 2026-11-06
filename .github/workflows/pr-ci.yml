@@ -2,7 +2,7 @@ name: PR CI
 
 on:
   pull_request:
-    branches: [master]
+    branches: [master, tmp/ci-docs-only-base]
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
