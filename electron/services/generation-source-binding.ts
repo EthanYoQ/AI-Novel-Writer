@@ -100,10 +100,11 @@ function stable(value: unknown): string {
     const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b)).map(([k, item]) => [k, sorted(item)])) : v;
     return JSON.stringify(sorted(value));
 }
+const PRIVATE_PATH = /^(?:[A-Za-z]:[\\/]|\\\\|file:\/\/)/;
 function safeMetadata(value: unknown): void {
     if (value === undefined || typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint')
         fail('GENERATION_METADATA_INVALID');
-    if (typeof value === 'string' && (/^(?:[A-Za-z]:[\\/]|\\\\|file:\/\/)/.test(value)))
+    if (typeof value === 'string' && PRIVATE_PATH.test(value))
         fail('GENERATION_METADATA_PRIVATE_PATH');
     if (Array.isArray(value)) {
         value.forEach(safeMetadata);
@@ -116,9 +117,13 @@ function safeMetadata(value: unknown): void {
             safeMetadata(entry);
         }
 }
+// llama-server 不加 --alias 时模型 id 就是模型文件路径。请求照原值发，记录只留文件名，本机目录不进作品数据。
+function recordedModelName(modelName: string): string {
+    return PRIVATE_PATH.test(modelName) ? modelName.split(/[\\/]/).filter(Boolean).pop() ?? '' : modelName;
+}
 function modelProjection(value: SafeGenerationModelReceipt): SafeGenerationModelReceipt {
     const { modelId, provider, protocol, modelName, modelRevision, endpointFingerprint, capabilityEvidence } = value;
-    const safe = { modelId, provider, protocol, modelName, modelRevision, endpointFingerprint, capabilityEvidence };
+    const safe = { modelId, provider, protocol, modelName: recordedModelName(modelName), modelRevision, endpointFingerprint, capabilityEvidence };
     safeMetadata(safe);
     if (!modelId || !modelRevision || !endpointFingerprint || !capabilityEvidence)
         fail('GENERATION_MODEL_RECEIPT_INVALID');
