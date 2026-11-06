@@ -9,6 +9,7 @@ import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../
 import { migrateSchema } from '../../migrations/runner'
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { ProjectPeekService } from '../project-peek'
+import { WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS } from '../../../test/helpers/windows-runner-io-stall'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
@@ -19,7 +20,7 @@ const handles: DatabaseHandle[] = []
 afterEach(() => {
   for (const database of handles.splice(0)) database.close()
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
-})
+}, WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS)
 
 function manifest(projectId: string) {
   return {
@@ -125,7 +126,7 @@ function ready<T extends { state: string }>(overview: T): asserts overview is T 
   expect(overview.state).toBe('ready')
 }
 
-describe('ProjectPeekService source-zero-write overview', { timeout: 20_000 }, () => {
+describe('ProjectPeekService source-zero-write overview', { timeout: WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS }, () => {
   it('accepts only a live opaque capability and invalidates it on revoke or manifest drift', () => {
     const f = fixture()
     const service = new ProjectPeekService({ scratchRoot: f.scratch })
