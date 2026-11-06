@@ -3468,6 +3468,7 @@ describe('local model file path as the model name', () => {
     ['D:\\models\\qwen.gguf', 'qwen.gguf'],
     ['\\\\server\\share\\m.gguf', 'm.gguf'],
     ['file:///Users/x/model.gguf', 'model.gguf'],
+    ['//server/share/m.gguf', 'm.gguf'],
   ])('generates with %s sent as is and records only %s', async (modelName, fileName) => {
     const sent: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
@@ -3478,7 +3479,7 @@ describe('local model file path as the model name', () => {
       } }) }
     }))
     const f = fixture()
-    Object.assign(f.model, { provider: 'custom', baseUrl: 'http://127.0.0.1:8080/v1', modelName })
+    Object.assign(f.model, { name: '', provider: 'custom', baseUrl: 'http://127.0.0.1:8080/v1', modelName })
     const run = f.owner.begin(f.begin)
     expect((await f.owner.execute({ handle: run.handle, invocationNonce: 'first', task })).outcome).toMatchObject({ status: 'completed', content: '正文。' })
     const owner = f.reopen(), resumed = await owner.resume(run.handle)
@@ -3487,6 +3488,7 @@ describe('local model file path as the model name', () => {
     const stored = f.db.prepare('SELECT binding_json FROM generation_runs').pluck().all() as string[]
     expect(stored.map(json => JSON.parse(json).sourceManifest.modelReceipt.modelName)).toEqual(stored.map(() => fileName))
     expect(stored.join('')).not.toMatch(/models|server|share|Users|file:/)
+    expect(f.db.prepare('SELECT model_name FROM llm_calls').pluck().all()).toEqual([fileName, fileName])
   })
   it('resumes a run whose binding recorded //server/share/m.gguf verbatim before the upgrade', async () => {
     const modelName = '//server/share/m.gguf', sent: string[] = []
