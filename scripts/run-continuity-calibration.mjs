@@ -470,7 +470,7 @@ async function consumeSse(response, receipt, receiptPath, signal) {
     }
   }
 
-  while (true) {
+  for (;;) {
     if (signal.aborted) reject("TIMEOUT", "请求超时")
     const chunk = await reader.read()
     if (chunk.done) break

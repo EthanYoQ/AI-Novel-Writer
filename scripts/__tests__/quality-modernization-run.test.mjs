@@ -5036,6 +5036,7 @@ test('context 审稿传选定候选原文，身份漂移与写稿材料错配仍
 })
 
 const s14bHistoryTest = test.extend({
+  // eslint-disable-next-line no-empty-pattern -- vitest 只按解构形参解析夹具依赖，这个夹具不依赖别的夹具
   history: async ({}, use) => {
     const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/split-boundary-'))
     const ledger = path.join(dir, '.runtime/.cache/novel-quality-modernization/physical-ledger.jsonl')

@@ -9,11 +9,9 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
-  statSync,
   writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve, win32 } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
