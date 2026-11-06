@@ -4,17 +4,6 @@ on:
   pull_request:
     branches: [master]
     types: [opened, synchronize, reopened, ready_for_review]
-    # Skip prose-only changes, but keep machine contracts and test inputs verified.
-    paths:
-      - '**'
-      - '!**/*.md'
-      - '!LICENSE'
-      - '!docs/**'
-      - 'docs/**/*.json'
-      - 'docs/**/*.mjs'
-      - 'README*.md'
-      - '.release/**'
-      - '.github/**'
   workflow_dispatch:
     inputs:
       machines:
@@ -33,8 +22,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Branch protection requires the desktop check on every PR, so prose-only
+  # changes skip the Windows shards here instead of skipping the workflow.
+  changes:
+    name: Detect docs-only changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.detect.outputs.docs_only }}
+    steps:
+      - name: Check out source
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      # HEAD is the PR merge commit; its first parent is the base branch tip.
+      # A PR that changes the classifier must not be judged by its own copy.
+      - name: Classify changed files
+        id: detect
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          git -c core.quotePath=false diff --name-only --no-renames HEAD^1 HEAD > "$RUNNER_TEMP/changed-files.txt"
+          cat "$RUNNER_TEMP/changed-files.txt"
+          if git diff --quiet HEAD^1 HEAD -- scripts/pr-docs-only.mjs; then
+            docs_only=$(node scripts/pr-docs-only.mjs < "$RUNNER_TEMP/changed-files.txt")
+          else
+            docs_only=false
+          fi
+          echo "docs_only=$docs_only" | tee -a "$GITHUB_OUTPUT"
+
   desktop-tests:
     name: Windows tests (${{ matrix.shard }}/${{ strategy.job-total }})
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     runs-on: windows-2022
     timeout-minutes: 45
     strategy:
@@ -153,10 +175,15 @@ jobs:
   desktop:
     name: Desktop PR CI (Windows)
     if: ${{ always() }}
-    needs: desktop-tests
+    needs: [changes, desktop-tests]
     runs-on: ubuntu-latest
     steps:
-      - name: Require every Windows shard to pass
+      - name: Require every Windows shard to pass unless the PR only changes docs
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           SHARD_RESULT: ${{ needs.desktop-tests.result }}
-        run: test "$SHARD_RESULT" = success
+        run: |
+          echo "changes=$CHANGES_RESULT docs_only=$DOCS_ONLY shards=$SHARD_RESULT"
+          test "$SHARD_RESULT" = success && exit 0
+          test "$CHANGES_RESULT" = success && test "$DOCS_ONLY" = true && test "$SHARD_RESULT" = skipped
