@@ -1,4 +1,3 @@
-/* global process */
 import fs from 'node:fs'
 import { decodePng } from './png.mjs'
 

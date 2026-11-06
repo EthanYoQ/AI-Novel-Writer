@@ -651,7 +651,7 @@ test('isolated production commands persist the selected phase operations', async
       fs.mkdirSync(path.join(target.roots.config, 'prompts'), { recursive: true })
       for (const template of templates) save(path.join(target.roots.config, 'prompts', `${template.key}.json`), template)
       if (planningRun) {
-        ;(await load('electron/repositories/project-core-repository.ts')).ProjectCoreRepository.init(scene.title, config.writingLanguage)
+        (await load('electron/repositories/project-core-repository.ts')).ProjectCoreRepository.init(scene.title, config.writingLanguage)
         const saved = await invoke('db:project-core-update', { ...config, projectName: scene.title,
           premise: planningSource.premise, worldbuilding: planningSource.worldbuilding }, project.rootPath, session)
         assert.ok(saved?.success, 'PLANNING_SOURCE_CORE_NOT_SAVED')

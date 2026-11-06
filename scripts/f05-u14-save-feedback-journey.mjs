@@ -1,4 +1,3 @@
-/* global process */
 import assert from 'node:assert/strict'
 import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { createHash, randomUUID } from 'node:crypto'

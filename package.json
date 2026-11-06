@@ -34,7 +34,7 @@
     "smoke:win-installer": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-win-installer.ps1",
     "smoke:win-v025-upgrade": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-win-v025-upgrade.ps1",
     "smoke:mac-dmg": "bash scripts/smoke-macos-dmg.sh",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0 && node scripts/check-color-literals.mjs",
+    "lint": "eslint . --ext ts,tsx,mjs --report-unused-disable-directives --max-warnings 0 && node scripts/check-color-literals.mjs",
     "preview": "vite preview",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build"

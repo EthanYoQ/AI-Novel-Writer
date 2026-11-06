@@ -1,5 +1,3 @@
-/* eslint-env node */
-
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { existsSync, fstatSync, ftruncateSync, lstatSync, openSync, closeSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'

@@ -16,8 +16,8 @@ it('recordCalls 遇到主进程没有的通道就报错，不让数据安全断�
 it('recordCalls 包住已有的通道：调用照常交给原处理函数，并记下所属作品', async () => {
   const app = fakeApp()
   await recordCalls(app, ['db:draft-list'])
-  assert.deepEqual(await app.handlers.get('db:draft-list')(null, 3, { projectPath: 'C:\novels\harbor' }), ['第 3 章的稿'])
-  assert.deepEqual(globalThis.__driveCalls.map(({ channel, projectPath }) => ({ channel, projectPath })), [{ channel: 'db:draft-list', projectPath: 'C:\novels\harbor' }])
+  assert.deepEqual(await app.handlers.get('db:draft-list')(null, 3, { projectPath: 'C:\\novels\\harbor' }), ['第 3 章的稿'])
+  assert.deepEqual(globalThis.__driveCalls.map(({ channel, projectPath }) => ({ channel, projectPath })), [{ channel: 'db:draft-list', projectPath: 'C:\\novels\\harbor' }])
 })
 
 it('stubChannel 遇到主进程没有的通道就报错，不凭空注册一个没人调用的处理函数', async () => {

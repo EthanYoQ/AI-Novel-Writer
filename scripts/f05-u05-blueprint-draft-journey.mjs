@@ -1,4 +1,3 @@
-/* global process */
 import assert from 'node:assert/strict'
 import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { createHash, randomUUID } from 'node:crypto'
@@ -372,7 +371,7 @@ async function main() {
     assert.equal((await invoke(page, 'llm:save-model', model)).success, true)
     assert.equal((await invoke(page, 'llm:set-default-model', model.id)).success, true)
     if (!selectedAction) {
-    ;({ created: project, session: context } = await createConfiguredProject(app, page, projectName))
+    ({ created: project, session: context } = await createConfiguredProject(app, page, projectName))
 
     mark('U05.A01-single-blueprint')
     const firstWarned = await requestBlueprints(page, 1)

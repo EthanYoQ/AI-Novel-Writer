@@ -1,4 +1,3 @@
-/* global process, Buffer */
 import assert from 'node:assert/strict'
 import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { execFileSync, spawnSync } from 'node:child_process'

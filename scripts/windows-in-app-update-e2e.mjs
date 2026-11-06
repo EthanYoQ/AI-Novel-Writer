@@ -1,5 +1,3 @@
-/* eslint-env node */
-
 import { Buffer } from 'node:buffer'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -11,11 +9,9 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
-  statSync,
   writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve, win32 } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'

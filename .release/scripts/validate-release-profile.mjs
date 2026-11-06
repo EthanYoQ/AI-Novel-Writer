@@ -25,7 +25,7 @@ function isNonEmptyString(value) {
 }
 
 function hasGlob(value) {
-  return /[*?\[\]]/.test(value);
+  return /[*?[\]]/.test(value);
 }
 
 function validateKnownKeys(value, allowedKeys, label, errors) {

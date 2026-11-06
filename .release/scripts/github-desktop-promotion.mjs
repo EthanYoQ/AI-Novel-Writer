@@ -164,7 +164,7 @@ export function parseChecksumTable(text) {
   const lines = text.split(/\r?\n/u).filter((line) => line.length > 0);
   if (lines.length === 0) throw new Error("SHA256SUMS.txt is empty");
   for (const line of lines) {
-    const match = /^([0-9a-fA-F]{64})  (.+)$/u.exec(line);
+    const match = /^([0-9a-fA-F]{64}) {2}(.+)$/u.exec(line);
     if (!match) throw new Error("SHA256SUMS.txt has an invalid line");
     const filePath = normalizeRelativePath(match[2]);
     const key = filePath.toLowerCase();
