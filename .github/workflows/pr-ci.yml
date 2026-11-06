@@ -39,13 +39,18 @@ jobs:
           persist-credentials: false
 
       # HEAD is the PR merge commit; its first parent is the base branch tip.
+      # A PR that changes the classifier must not be judged by its own copy.
       - name: Classify changed files
         id: detect
         if: ${{ github.event_name == 'pull_request' }}
         run: |
           git -c core.quotePath=false diff --name-only --no-renames HEAD^1 HEAD > "$RUNNER_TEMP/changed-files.txt"
           cat "$RUNNER_TEMP/changed-files.txt"
-          docs_only=$(node scripts/pr-docs-only.mjs < "$RUNNER_TEMP/changed-files.txt")
+          if git diff --quiet HEAD^1 HEAD -- scripts/pr-docs-only.mjs; then
+            docs_only=$(node scripts/pr-docs-only.mjs < "$RUNNER_TEMP/changed-files.txt")
+          else
+            docs_only=false
+          fi
           echo "docs_only=$docs_only" | tee -a "$GITHUB_OUTPUT"
 
   desktop-tests:
