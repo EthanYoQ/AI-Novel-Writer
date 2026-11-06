@@ -586,3 +586,11 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 | 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
 |---|---|---|---|---|
 | `f571-volume-unsupported` | 第 3 章定稿后「导入知识库」失败，中文说明以「正文定稿已保存，但没能收进知识库」开头，写明 exFAT、NTFS、APFS 与「重试」（`f571-volume-unsupported-zh`）；点「重试失败步骤」后又探测一次，说明不变；切到英文后说明是英文、不带汉字（`f571-volume-unsupported-en`）；两种语言都不显示 `LanceError`、`os error` 与错误码，这一行与整卡都有重试。去掉替身后点这一行的「Retry」，导入知识库完成，卡上 4 / 4、不再有「重试失败步骤」（`f571-volume-unsupported-retried`） | 重试成功后的定稿视图 | 是 | #571 |
+
+## 导入创作资料时读文件失败（#593）
+
+场景在 `scripts/redesign/f593-scenarios.mjs`。系统打开对话框桩成返回一个 GBK 编码的 `.txt`，授权照常签发，读文件时安全文件层报 `SECURE_FS_INVALID_TEXT`。
+
+| 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
+|---|---|---|---|---|
+| `f593-kb-invalid-text` | 知识库页点「导入创作资料」选中非 UTF-8 文件，提示写明「另存为 UTF-8 后重新导入」，不出现「授权」和错误码；修复前是「外部文件授权操作失败。」 | 带提示的知识库页 | 否 | #593 |

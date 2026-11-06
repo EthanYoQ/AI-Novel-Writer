@@ -7,6 +7,7 @@ import {
   externalFileGrants,
 } from '../services/external-file-grant-service'
 import { mainText } from '../i18n'
+import { externalFileReadFailureText } from './external-file-read-failure'
 import {
   atomicWriteFailureCommitState,
   windowsSafeFileSystem,
@@ -113,11 +114,16 @@ export function registerExternalFileGrantController(
   ipcMain.handle(
     'fs:grant-read-file',
     async (event: GrantEvent, grantId: string, relativePath?: string) => {
+      let target: ResolvedExternalFileGrant
       try {
-        const target = resolveGrantPath(grants, event, grantId, 'read', relativePath)
-        return { success: true, content: await fileSystem.readText(target) }
+        target = resolveGrantPath(grants, event, grantId, 'read', relativePath)
       } catch (error) {
         return { success: false, content: '', error: grantErrorText(error) }
+      }
+      try {
+        return { success: true, content: await fileSystem.readText(target) }
+      } catch (error) {
+        return { success: false, content: '', error: externalFileReadFailureText(error) }
       }
     },
   )

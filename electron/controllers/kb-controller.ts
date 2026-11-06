@@ -30,6 +30,7 @@ import {
 } from '../services/project-storage-preflight'
 import { ImportRunRepository } from '../repositories/import-run-repository'
 import { explainImportRunFailure, importRunLocale } from './import-run-failure'
+import { externalFileReadFailureText } from './external-file-read-failure'
 import { FinalizationRepository } from '../repositories/finalization-repository'
 
 function text(zhCNText: string, enUSText: string): string {
@@ -69,8 +70,9 @@ function referenceImportDisplayName(binding: { chapterNumber: number; title: str
 async function readGrantedKnowledgeFolder(
   fileSystem: WindowsSafeFileSystem,
   root: SecureFileCapability,
-): Promise<Array<{ fileName: string; content: string }>> {
-  const imported: Array<{ fileName: string; content: string }> = []
+): Promise<{ files: Array<{ fileName: string; content: string }>; unreadable: string[] }> {
+  const files: Array<{ fileName: string; content: string }> = []
+  const unreadable: string[] = []
   const visit = async (directory: SecureFileCapability, depth: number): Promise<void> => {
     if (depth > MAX_SECURE_KNOWLEDGE_IMPORT_DEPTH) {
       throw new Error('SECURE_FS_DIRECTORY_TOO_DEEP')
@@ -83,17 +85,19 @@ async function readGrantedKnowledgeFolder(
         continue
       }
       if (!/\.(txt|md|markdown)$/i.test(entry.name)) continue
-      if (imported.length >= MAX_SECURE_KNOWLEDGE_IMPORT_FILES) {
+      if (files.length + unreadable.length >= MAX_SECURE_KNOWLEDGE_IMPORT_FILES) {
         throw new Error('SECURE_FS_DIRECTORY_TOO_LARGE')
       }
-      imported.push({
-        fileName: path.basename(entry.name),
-        content: await fileSystem.readText(child),
-      })
+      const fileName = path.basename(entry.name)
+      try {
+        files.push({ fileName, content: await fileSystem.readText(child) })
+      } catch {
+        unreadable.push(fileName)
+      }
     }
   }
   await visit(root, 0)
-  return imported
+  return { files, unreadable }
 }
 
 /**
@@ -252,19 +256,24 @@ export function registerKBController(
   const ipcMain = { handle: registerKnowledgeBaseHandler }
   ipcMain.handle('kb:import-document', async (event, grantId: string, expectedProjectPath: string) => {
     const projectPath = requireProjectPath(expectedProjectPath)
-    let importedFile: { fileName: string; content: string }
+    let file: SecureFileCapability
     try {
-      const file = externalFileGrants.resolve({
+      file = externalFileGrants.resolve({
         grantId,
         webContentsId: event.sender.id,
         operation: 'read',
       })
+    } catch {
+      return { success: false, error: invalidExternalGrantText() }
+    }
+    let importedFile: { fileName: string; content: string }
+    try {
       importedFile = {
         fileName: path.basename(file.relativePath),
         content: await fileSystem.readText(file),
       }
-    } catch {
-      return { success: false, error: invalidExternalGrantText() }
+    } catch (error) {
+      return { success: false, error: externalFileReadFailureText(error) }
     }
     const embConfig = getEmbeddingConfig()
     const protocol = embConfig?.protocol ?? 'openai'
@@ -280,12 +289,12 @@ export function registerKBController(
 
   ipcMain.handle('kb:import-folder', async (event, grantId: string, expectedProjectPath: string) => {
     const projectPath = requireProjectPath(expectedProjectPath)
-    let importedFiles: Array<{ fileName: string; content: string }>
+    let readableFolder: SecureFileCapability
     try {
       // Directory enumeration alone is not authority to read every discovered
       // file. Validate the separate read operation before the one-use list
       // capability is consumed and deleted.
-      const readableFolder = externalFileGrants.revalidate({
+      readableFolder = externalFileGrants.revalidate({
         grantId,
         webContentsId: event.sender.id,
         operation: 'read',
@@ -295,17 +304,22 @@ export function registerKBController(
         webContentsId: event.sender.id,
         operation: 'list',
       })
-      importedFiles = await readGrantedKnowledgeFolder(fileSystem, readableFolder)
     } catch {
       return { success: false, importedCount: 0, failedFiles: [], error: invalidExternalGrantText() }
+    }
+    let folder: Awaited<ReturnType<typeof readGrantedKnowledgeFolder>>
+    try {
+      folder = await readGrantedKnowledgeFolder(fileSystem, readableFolder)
+    } catch (error) {
+      return { success: false, importedCount: 0, failedFiles: [], error: externalFileReadFailureText(error) }
     }
     const embConfig = getEmbeddingConfig()
     const protocol = embConfig?.protocol ?? 'openai'
     const model = embConfig?.model ?? UNCONFIGURED_EMBEDDING_MODEL
     return knowledgeBaseLoader.run(async (kb) => {
-      const failedFiles: string[] = []
+      const failedFiles = [...folder.unreadable]
       let importedCount = 0
-      for (const importedFile of importedFiles) {
+      for (const importedFile of folder.files) {
         const result = await kb.importText(
           importedFile.content,
           importedFile.fileName,
