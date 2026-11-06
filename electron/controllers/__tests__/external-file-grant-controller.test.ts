@@ -26,6 +26,12 @@ import type { AtomicWriteConstraints, WindowsSafeFileSystem } from '../../securi
 import { nodeTestSecureFileSystem } from '../../../test/helpers/node-test-secure-file-system'
 import { getGlobalDataRoot } from '../../services/app-data-locator'
 import type { GlobalConfig } from '../../../src/shared/ipc-channels'
+import {
+  READ_FAILURE_TEXT,
+  expectedReadFailureText,
+  externalFileGrantCodes,
+  secureFileSystemCodes,
+} from '../../../test/helpers/external-file-read-codes'
 
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-external-grant-controller-'))
 const SECURE_FILE_SYSTEM_TEST_TIMEOUT_MS = 15_000
@@ -386,6 +392,80 @@ describe('external file grant refusals are explained by error code (#474)', () =
     await expect(read(issue(['read']), '../outside.txt')).resolves.toMatchObject({ success: false, error: invalidPath })
     await expect(read(issue(['read']), path.resolve(directory, 'grant-code.txt'))).resolves.toMatchObject({ success: false, error: invalidPath })
   }, SECURE_FILE_SYSTEM_TEST_TIMEOUT_MS)
+})
+
+describe('授权通过后读文件失败，说读文件的原因而不是授权（#593）', () => {
+  const grantTexts = [
+    '外部文件授权已失效，请重新选择。',
+    '当前窗口无权使用该外部文件授权。',
+    '外部文件授权路径无效，已拒绝操作。',
+    '安全外部文件服务不可用，已拒绝操作。',
+    '外部文件授权操作失败。',
+  ]
+  let directory = ''
+
+  beforeAll(() => {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-grant-read-failure-'))
+    fs.writeFileSync(path.join(directory, 'notes.txt'), 'text', 'utf8')
+  })
+
+  afterAll(() => {
+    fs.rmSync(directory, { recursive: true, force: true })
+  })
+
+  async function readFailingWith(code: string) {
+    const grants = new ExternalFileGrantService({ now: () => 1_000, newGrantId: () => `read-${code}` })
+    const grant = grants.issueFile({
+      webContentsId: 17,
+      filePath: path.join(directory, 'notes.txt'),
+      operations: ['read'],
+      ttlMs: 60_000,
+      maxUses: 1,
+    })
+    const fileSystem = {
+      ...nodeTestSecureFileSystem,
+      readText: vi.fn(async () => { throw new Error(code) }),
+    } as WindowsSafeFileSystem
+    mocks.handlers.clear()
+    registerExternalFileGrantController(grants, fileSystem)
+    return handler('fs:grant-read-file')(event(), grant.grantId) as Promise<{ success: boolean; error?: string }>
+  }
+
+  it.each(Object.keys(READ_FAILURE_TEXT).filter(code => code !== 'generic'))(
+    '%s 给出能照做的说明',
+    async (code) => {
+      await expect(readFailingWith(code)).resolves.toEqual({
+        success: false,
+        content: '',
+        error: expectedReadFailureText(code),
+      })
+    },
+  )
+
+  it('安全文件层的每个码在读文件阶段都落到读文件说明，不落到授权文案', async () => {
+    const codes = secureFileSystemCodes()
+    expect(codes).toEqual(expect.arrayContaining(['SECURE_FS_INVALID_TEXT', 'SECURE_FS_ROOT_CHANGED', 'SECURE_FS_HELPER_FAILED']))
+    for (const code of codes) {
+      const result = await readFailingWith(code)
+      expect({ code, error: result.error }).toEqual({ code, error: expectedReadFailureText(code) })
+      expect(grantTexts).not.toContain(result.error)
+    }
+  })
+
+  it('授权服务的每个码仍走授权文案，且不去读文件', async () => {
+    const readText = vi.fn()
+    for (const code of externalFileGrantCodes()) {
+      const grants = {
+        resolve: () => { throw new Error(code) },
+        revalidate: () => { throw new Error(code) },
+      } as unknown as ExternalFileGrantService
+      mocks.handlers.clear()
+      registerExternalFileGrantController(grants, { ...nodeTestSecureFileSystem, readText } as WindowsSafeFileSystem)
+      const result = await handler('fs:grant-read-file')(event(), 'grant') as { error?: string }
+      expect({ code, inGrantTexts: grantTexts.includes(result.error ?? '') }).toEqual({ code, inGrantTexts: true })
+    }
+    expect(readText).not.toHaveBeenCalled()
+  })
 })
 
 // Main error localization reads admitted global data even for rejected project IO.
