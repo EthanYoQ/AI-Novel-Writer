@@ -19,7 +19,7 @@ export const F593_SCENARIOS = {
     }, file)
     await refs.open(page, 'knowledge')
     await refs.materials(page).getByRole('button', { name: '导入创作资料' }).click()
-    const toast = stage.toastStack(page).locator(stage.LIVE_TOAST).first()
+    const toast = stage.toastStack(page).locator(stage.LIVE_TOAST).last()
     await toast.waitFor({ state: 'visible', timeout: 15_000 })
     const shown = (await toast.innerText()).trim()
     assert.match(shown, /另存为 UTF-8 后重新导入/u, '提示给出另存为 UTF-8 的办法')
