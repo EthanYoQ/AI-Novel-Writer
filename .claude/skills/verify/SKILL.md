@@ -5,7 +5,7 @@ description: 在真实 Electron 里驱动书童做实机验证：截图、复现
 
 # verify
 
-驱动脚本是 `scripts/redesign/drive.mjs`。它用 Playwright 的 `_electron` 启动当前工作树的构建产物（`electron .`），每个会话（一次冷启动）一个全新的隔离目录，模型调用全部走本机假服务，不调用真实模型。单跑一个场景就是只含这个场景的会话。
+驱动脚本是 `scripts/redesign/drive.mjs`。它用 Playwright 的 `_electron` 启动当前工作树的构建产物（`electron .`），每个会话（一次冷启动）一个全新的隔离目录，模型调用默认走本机假服务，不调用真实模型；只有带 `--real-model` 跑 `real-*` 场景时，请求发往硅基流动 `https://api.siliconflow.cn/v1/`。单跑一个场景就是只含这个场景的会话。
 
 窗口开在屏幕外，不抢焦点，不打扰正在用电脑的人。不碰 `%APPDATA%\ai-novel-writer`，也不碰维护者正在运行的书童。
 
@@ -29,6 +29,7 @@ fnm exec --using=22.23.1 -- cmd //c pnpm build
 fnm exec --using=22.23.1 -- node scripts/redesign/drive.mjs --scenario <名称> [--theme light|dark] [--out <目录>] [--dump-dom] [--console] [--video] [--app-root <目录>] [--shell writer|stage] [--real-model]
 ```
 
+- 参考文件里的 `node …`、`pnpm verify:drive …` 命令都省略了 `fnm exec --using=22.23.1 --` 前缀，运行时照上面这条补上。
 - 不带参数运行会打印全部场景名，退出码 2。场景定义在 `scripts/redesign/*-scenarios.mjs`。
 - `--theme` 默认 `light`（浅色），`dark` 为深色。界面类改动浅色、深色各截一次。
 - `--out` 默认 `.runtime/redesign-baseline/`。batch 线按任务书指定的截图目录传。

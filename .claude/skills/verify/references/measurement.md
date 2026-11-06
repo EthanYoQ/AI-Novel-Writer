@@ -1,6 +1,6 @@
 # 截图可重复性与性能测量
 
-比较截图是否稳定，或者测启动耗时、空闲内存、页面内计时时读。
+比较截图是否稳定，或者测启动耗时、空闲内存、页面内计时时读。本文的 `node` 命令都省略了 `fnm exec --using=22.23.1 --` 前缀，运行时照正文「命令」补上。
 
 ## 截图可重复性
 
@@ -9,6 +9,14 @@
 ```bash
 for i in 1 2 3; do node scripts/redesign/drive.mjs --scenario review --out shots/r$i; done
 node scripts/redesign/pixel-diff.mjs shots/r1/review-light.png shots/r2/review-light.png shots/r3/review-light.png
+```
+
+上面的 `review` 是旧外壳基线场景，只对 trunk（`--app-root`）能跑。当前构建用纸墨外壳场景，并且任一次驱动退出码非 0 就停下；每次比较用新的输出目录，免得 `pixel-diff.mjs` 比到上一轮留下的旧图：
+
+```bash
+out=.runtime/repeat-$(date +%s)
+(for i in 1 2 3; do node scripts/redesign/drive.mjs --scenario stage-open-sample --out $out/r$i || exit 1; done
+node scripts/redesign/pixel-diff.mjs $out/r1/stage-open-sample-light.png $out/r2/stage-open-sample-light.png $out/r3/stage-open-sample-light.png)
 ```
 
 `pixel-diff.mjs` 输出各张相对第一张的不同像素占比，`maxRatio` 小于 0.005 时退出码 0，否则 1。尺寸与第一张不同的图记为全部不同（`ratio` 为 1），`reason` 写明两边尺寸。任一通道差值超过 2 级才算不同像素（`ratio`），因为同一状态连续截图时，渲染器在背景模糊和渐变上偶发全屏 ±1～2 级抖动；逐字节比较的结果另列为 `strictRatio`，供判断差异是不是这种抖动。

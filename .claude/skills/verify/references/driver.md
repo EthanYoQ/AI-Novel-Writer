@@ -1,8 +1,10 @@
 # 驱动、输出与只读诊断（完整说明）
 
-正文只列常用部分。要查某个参数的细节、结果 JSON 的每个字段、会话结束时的三项检查，或者要改驱动和页面对象时，读这份。安装与构建命令以正文「启动前」为准（用 fnm 的 Node 22.23.1）。
+正文只列常用部分。要查某个参数的细节、结果 JSON 的每个字段、会话结束时的三项检查，或者要改驱动和页面对象时，读这份。安装与构建命令以正文「启动前」为准（用 fnm 的 Node 22.23.1）。本文的 `node`、`pnpm` 命令都省略了 `fnm exec --using=22.23.1 --` 前缀，运行时照正文「命令」补上。
 
 驱动脚本是 `scripts/redesign/drive.mjs`。它用 Playwright 的 `_electron` 启动当前工作树的构建产物（`electron .`），每个会话（一次冷启动）一个全新的隔离目录，模型调用全部走本机假服务，不调用真实模型。单跑一个场景就是只含这个场景的会话。
+
+例外是 `--real-model`：只用于 `real-*` 场景，应用的生成与嵌入请求发往硅基流动，凭据从环境变量 `SILICONFLOW_API_KEY` 读，见 `scripts/redesign/real-model.mjs`。
 
 应用窗口不出现在屏幕上。驱动用 `electron -r scripts/redesign/offscreen-window.cjs` 在应用主进程脚本之前挂上 `browser-window-created` 监听：窗口一创建就移到所有显示器右侧之外，去掉任务栏按钮，设为不可激活并交还焦点，不打扰正在用电脑的人。截图走页面视口，与窗口位置无关；页面焦点由 Playwright 的焦点模拟提供，`document.hasFocus()` 仍为 true。每次截图前断言 `document.visibilityState` 为 `visible`，防止屏幕外窗口被当作隐藏而停帧。
 
@@ -50,6 +52,7 @@ RD-10 删除旧外壳之后，场景分三类：
 每个会话结束后，驱动检查三件事，任一不满足即退出码 1：
 
 - `externalRequests` 为空。每个会话都在 Electron 启动后替换主进程的 `globalThis.fetch`：用夹具模型的会话只放行 `https://api.openai.com/v1/*` 并改道到本机假服务，其余会话一律不放行。被拒的请求记下来源并抛错。检查范围只有主进程 `fetch`，且从 `electron.launch` 返回后才生效；更早的请求、渲染进程的请求和 Electron `net` 模块的请求都不在内。
+  - 带 `--real-model` 的会话不接假服务，只放行 `https://api.siliconflow.cn/v1/*`，其余请求照样拒绝并记进 `externalRequests`。
 - `residualProcesses` 为空：应用关闭后，以 `--user-data-dir` 匹配不到存活进程。子进程退出需要时间，驱动最多查 10 次、间隔 300 ms。
 - `externalWrites` 为空：`~/.vela`、`%APPDATA%\ai-novel-writer`、`%APPDATA%\AI小说作家` 里没有新增或删除的条目，文件的大小与修改时间也不变。列出的是变了的具体路径。
   - 这几个目录第一层的 `GPUCache`、`DawnWebGPUCache`、`DawnGraphiteCache` 不算：本机开着的书童会自己刷新里面文件的修改时间。它们的变化列进 `externalWritesIgnored`，不影响退出码。
@@ -64,6 +67,8 @@ RD-10 删除旧外壳之后，场景分三类：
 node scripts/redesign/drive.mjs --scenario open-sample --dump-dom --console --out <目录>
 ```
 
+`open-sample` 是旧外壳基线场景，只对 trunk（`--app-root`）跑；诊断当前构建换成 `stage-open-sample`，其余参数不变。
+
 - `--dump-dom` 在每个截图点截图后写 `<场景>-<主题>.dom.html`（`page.content()`）和 `.aria.yml`（Playwright 无障碍快照）。改页面对象前先看 `.aria.yml`，选择器优先用其中的角色与可访问名称。
 - `--console` 每个会话写一份 `<会话>-<主题>.console.log`（单跑时会话名就是场景名，`baseline-all` 为 `baseline-shelf`、`baseline-sample`）：渲染进程控制台、页面异常、主进程 stdout/stderr，以及假模型每次请求的分类（`[fake-model] prose|review|revision|character-state|embedding`）。
 
@@ -72,3 +77,5 @@ node scripts/redesign/drive.mjs --scenario open-sample --dump-dom --console --ou
 类名选择器只出现在 `scripts/redesign/pages/`，按任务域分文件：`shell`（启动、外壳就绪、标题栏、状态栏、左右栏与可收起面板）、`bookshelf`（旧外壳书房与两种外壳的新建作品）、`project`（项目树）、`chapter`（单章写作、审稿、修稿合并、定稿）、`run-panel`（运行面板）、`settings`（设置，含外观里切换界面布局）、`materials`（知识库与角色卡导入）、`stage`（新外壳：流程脊、章节列表、标签条、Ctrl K 与 Ctrl P、保存状态、沉浸写作、书房）、`run-sheet`（新外壳的运行侧页）。`shell.waitForShell` 对两种外壳都成立。外壳替换后只改这些页面对象，场景 `scripts/redesign/scenarios.mjs` 不动。
 
 `/.claude/` 在 `.gitignore` 里，提交本文件的改动要用 `git add -f .claude/skills/verify/SKILL.md`（或 `git add -u`）。假模型在 `scripts/redesign/fake-model.mjs`，按提示词特征返回正文、短细纲（与正文同一段文字，但不参与定速流出）、审稿 JSON、修稿正文、角色状态 JSON 或角色提取 JSON。
+
+拆分后本文件在 `references/` 下，上面那条 `git add -f` 只覆盖正文。提交 skill 的任何改动都用正文「提交本 skill 的改动」里的 `git add -f .claude/skills/verify`。

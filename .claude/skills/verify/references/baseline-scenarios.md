@@ -48,3 +48,5 @@ RD-10 之前的旧外壳场景，只对 trunk（`--app-root`）跑。做旧外�
 | `nav-plot-blueprint-source` | 生成剧情树（假模型回复不是 JSON，落到按蓝图的确定性剧情树），从事件来源打开第 1、2 章蓝图；第 1 章标题改了不保存，断言切换选中后改动仍在，手动选第 2 章后再点第 1 章来源会重新选中第 1 章 | 章节蓝图选中第 1 章、标题有未保存改动 | 是 |
 
 `nav-` 场景对 trunk（`--app-root`）与 head 各跑一次，两边都通过即行为一致。`write-latency` 与 `startup-timing` 一样交替各跑 5 次取中位数。
+
+上面这段和 `settings-appearance` 的「head 比 trunk 多」都是 RD-10 之前的做法。RD-10 起 head 没有旧外壳，`nav-*`、`write-latency`、`settings-appearance` 对 head 跑必然失败：它们只对 trunk 跑，head 一侧改跑对应的纸墨外壳场景（设置类用 `stage-settings-*`，其余按页面在 `rd-stage-scenarios.md` 里找），分类见 `driver.md`「RD-10 删除旧外壳之后」。

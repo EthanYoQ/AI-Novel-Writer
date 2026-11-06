@@ -1,6 +1,6 @@
 # 纸墨外壳场景（RD-3 至 RD-9）
 
-按页面查场景：流程脊、运行侧页、书房与设置、架构与角色、蓝图与写作弹层、正文单章、作品资料页。
+按页面查场景：流程脊、运行侧页、书房与设置、架构与角色、蓝图与写作弹层、正文单章、作品资料页。本文的 `node` 命令都省略了 `fnm exec --using=22.23.1 --` 前缀，运行时照正文「命令」补上。
 
 ## 新外壳（RD-3 起）
 
@@ -30,6 +30,8 @@
 | `chapter-switch` | 打开第 3 章后，从点击第 4 章到它的正文在编辑器里可见，渲染进程内按帧计时，写进 `measured.chapterSwitchMs`。旧外壳点草稿箱里的草稿，新外壳点流程脊里的章 | 第 4 章正文 | 否 | perf |
 
 lane 1 的旧外壳部分：head 与 trunk 各跑一次 `baseline-all`，逐张 `pixel-diff.mjs`，`maxRatio` 小于 0.005。
+
+这是 RD-3 到 RD-9 的做法。RD-10 起 head 没有旧外壳，`baseline-all` 只对 trunk（`--app-root`）跑，head 上跑必然失败。
 
 perf：三组交替，各预热 2 次不计，再各计 5 次：trunk 旧外壳、head 旧外壳、head 新外壳。head 旧外壳对 trunk 旧外壳量的是新外壳模块被 `App.tsx` 静态引入后旧外壳用户付出的启动代价。这是 RD-3 到 RD-9 的做法；RD-10 起 head 没有旧外壳，只比 trunk 旧外壳与 head 纸墨外壳两组，下面带 `--shell stage` 的命令对 head 去掉 `--shell`。
 
