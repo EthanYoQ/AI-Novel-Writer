@@ -117,9 +117,8 @@ function safeMetadata(value: unknown): void {
             safeMetadata(entry);
         }
 }
-// llama-server 不加 --alias 时模型 id 就是模型文件路径。请求照原值发，记录只留文件名，本机目录不进作品数据。
-// Windows 也认 //server/share 形式的 UNC，模型名里多认这一种。
-function recordedModelName(modelName: string): string {
+// llama-server 不加 --alias 时，模型 id 就是模型文件路径。
+export function recordedModelName(modelName: string): string {
     return PRIVATE_PATH.test(modelName) || /^\/\//.test(modelName) ? modelName.split(/[\\/]/).filter(Boolean).pop() ?? '' : modelName;
 }
 function modelProjection(value: SafeGenerationModelReceipt, verbatimModelName: boolean): SafeGenerationModelReceipt {
@@ -624,9 +623,9 @@ export function rebuildGenerationSourceBinding(deps: GenerationSourceBindingDepe
     if (manifest.version !== 1)
         fail('GENERATION_SOURCE_MANIFEST_INVALID');
     const receipt = modelReceipt ?? manifest.modelReceipt;
-    // 升级前开跑的运行把 //server/share 形式的模型名原样存进了记录。模型没换时沿用原值，重建出的指纹才对得上。
+    const modelUnchanged = receipt.modelName === manifest.modelReceipt?.modelName;
     return buildGenerationSourceBinding(deps, { ...manifest, projectId: previous.projectId, epoch: nextEpoch, modelReceipt: receipt, policy: policy ?? manifest.policy, outputContract: outputContract ?? manifest.outputContract },
-        receipt.modelName === manifest.modelReceipt?.modelName);
+        modelUnchanged);
 }
 export function compareGenerationSourceBindings(previous: RunBinding, next: RunBinding): boolean {
     return previous.projectId === next.projectId && isDeepStrictEqual(previous.fingerprint, next.fingerprint) && previous.contextSnapshotId === next.contextSnapshotId && isDeepStrictEqual(previous.sourceManifest, next.sourceManifest)
