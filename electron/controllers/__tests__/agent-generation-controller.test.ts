@@ -22,6 +22,7 @@ import { registerDatabaseController } from '../db-controller'
 import { ModelExecutionLeaseRegistry } from '../../services/model-execution-lease'
 import { projectAccess } from '../../services/project-access'
 import { createProjectDatabase, initProjectDatabase, closeProjectDatabase, getProjectDb } from '../../database'
+import { WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS } from '../../../test/helpers/windows-runner-io-stall'
 
 const base = path.join(os.tmpdir(), 'an-agent-ipc-')
 const model: ModelProfile = { id: 'synthetic-ipc', name: 'Synthetic IPC', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1',
@@ -82,16 +83,16 @@ beforeEach(() => {
   vi.stubGlobal('window', { aiNovelAPI: { invoke: (channel: string, ...args: unknown[]) => mocks.handlers.get(channel)!({ sender }, ...args) } })
   vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('No unstubbed network access is permitted') }))
   sender.send.mockClear()
-})
+}, WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS)
 afterEach(() => {
   closeProjectDatabase(); projectAccess.invalidateCurrentSession(); vi.unstubAllGlobals(); vi.restoreAllMocks()
   useProjectStore.setState({ currentProject: null })
   useWorkflowStore.setState({ activeRuns: [], history: [] })
   if (!path.resolve(root).startsWith(path.resolve(base))) throw new Error('Synthetic cleanup outside owned temp root')
   fs.rmSync(root, { recursive: true, force: true })
-})
+}, WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS)
 
-describe('Agent registered IPC, actual SQLite and intercepted provider boundary', () => {
+describe('Agent registered IPC, actual SQLite and intercepted provider boundary', { timeout: WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS }, () => {
   it.each(['generate_architecture', 'generate_blueprint'] as const)('carries frozen planning through the real %s launcher and factory into main admission', async workflow => {
     getProjectDb()!.prepare('UPDATE project_core SET premise=?').run('Synthetic established premise. '.repeat(4))
     getProjectDb()!.exec("INSERT INTO characters(name) VALUES('Mara')")
