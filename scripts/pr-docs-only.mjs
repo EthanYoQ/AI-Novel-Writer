@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
-// 沿用原 pr-ci.yml paths 过滤的语义：规则按序匹配，最后命中的一条说了算；一条都不命中的文件要跑 CI。
+// 与 GitHub paths 过滤同语义：后面的规则覆盖前面的。
 const RULES = [
   ['**/*.md', true],
   ['LICENSE', true],
