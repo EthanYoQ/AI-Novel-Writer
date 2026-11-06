@@ -24,7 +24,7 @@ import { decodeBlueprintAuthorPayload } from '../../src/shared/blueprint-semanti
 import { GenerationDraftEffects, assertGenerationBatchIntent } from './generation-draft-effects'
 import { CharacterProposalService } from './character-proposal-service'
 import { proveCharacterProposal } from './generation-character-proposal-proof'
-import { compareGenerationSourceBindings } from './generation-source-binding'
+import { compareGenerationSourceBindings, recordedModelName } from './generation-source-binding'
 import type { GenerationKnowledgeSnapshot } from '../../src/shared/generation-knowledge'
 import type { PrepareDraftContextRequest, PreparedDraftContext } from '../../src/shared/generation-owner-contract'
 import { FinalizedCharacterGeneration } from './finalized-character-generation'
@@ -269,7 +269,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const reasoning = usage?.accounting !== 'separately-billed' || usage.reasoningTokens === null ? 0 : count(usage.reasoningTokens)
       const completionTokens = completion === null || reasoning === null ? null : completion + reasoning
       try {
-        LLMHistoryRepository.logCall({ modelId: model.id, modelName: model.name || model.modelName, purpose: task.purpose,
+        LLMHistoryRepository.logCall({ modelId: model.id, modelName: model.name || recordedModelName(model.modelName), purpose: task.purpose,
           promptTokens: usage?.promptTokens ?? null, completionTokens, totalTokens: usage?.totalTokens ?? null,
           durationMs: Math.max(0, Date.now() - startedAt), success, errorMessage }, deps.database)
       } catch (error) { console.warn('[AI Novel Writer] LLM call statistics were not recorded.', error) }

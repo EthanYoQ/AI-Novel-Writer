@@ -100,10 +100,11 @@ function stable(value: unknown): string {
     const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b)).map(([k, item]) => [k, sorted(item)])) : v;
     return JSON.stringify(sorted(value));
 }
+const PRIVATE_PATH = /^(?:[A-Za-z]:[\\/]|\\\\|file:\/\/)/;
 function safeMetadata(value: unknown): void {
     if (value === undefined || typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint')
         fail('GENERATION_METADATA_INVALID');
-    if (typeof value === 'string' && (/^(?:[A-Za-z]:[\\/]|\\\\|file:\/\/)/.test(value)))
+    if (typeof value === 'string' && PRIVATE_PATH.test(value))
         fail('GENERATION_METADATA_PRIVATE_PATH');
     if (Array.isArray(value)) {
         value.forEach(safeMetadata);
@@ -116,9 +117,13 @@ function safeMetadata(value: unknown): void {
             safeMetadata(entry);
         }
 }
-function modelProjection(value: SafeGenerationModelReceipt): SafeGenerationModelReceipt {
+// llama-server 不加 --alias 时，模型 id 就是模型文件路径。
+export function recordedModelName(modelName: string): string {
+    return PRIVATE_PATH.test(modelName) || /^\/\//.test(modelName) ? modelName.split(/[\\/]/).filter(Boolean).pop() ?? '' : modelName;
+}
+function modelProjection(value: SafeGenerationModelReceipt, verbatimModelName: boolean): SafeGenerationModelReceipt {
     const { modelId, provider, protocol, modelName, modelRevision, endpointFingerprint, capabilityEvidence } = value;
-    const safe = { modelId, provider, protocol, modelName, modelRevision, endpointFingerprint, capabilityEvidence };
+    const safe = { modelId, provider, protocol, modelName: verbatimModelName ? modelName : recordedModelName(modelName), modelRevision, endpointFingerprint, capabilityEvidence };
     safeMetadata(safe);
     if (!modelId || !modelRevision || !endpointFingerprint || !capabilityEvidence)
         fail('GENERATION_MODEL_RECEIPT_INVALID');
@@ -277,7 +282,7 @@ function freezeMaterialDecision(value: unknown): MaterialDecisionReceipt {
     safeMetadata(frozen);
     return JSON.parse(stable(frozen));
 }
-export function buildGenerationSourceBinding(deps: GenerationSourceBindingDependencies, input: GenerationSourceBindingInput): GenerationSourceBindingResult {
+export function buildGenerationSourceBinding(deps: GenerationSourceBindingDependencies, input: GenerationSourceBindingInput, verbatimModelName = false): GenerationSourceBindingResult {
     if (!deps.db.open || !input.projectId || !input.epoch || !input.operation)
         fail('GENERATION_SOURCE_BINDING_INVALID');
     if (!Array.isArray(input.promptKeys) || input.promptKeys.length === 0)
@@ -306,7 +311,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     if (input.promptKeys.some(key => !/^[A-Za-z0-9_-]{1,128}$/.test(key)) || input.skillStages.some(stage => !WRITING_SKILL_STAGES.includes(stage)))
         fail('GENERATION_ASSET_ID_INVALID');
     const dataVersion = deps.db.pragma('data_version', { simple: true }), changes = deps.db.prepare('SELECT total_changes()').pluck().get();
-    const modelReceipt = modelProjection(input.modelReceipt);
+    const modelReceipt = modelProjection(input.modelReceipt, verbatimModelName);
     const materialDecision = input.materialDecision === undefined ? undefined : freezeMaterialDecision(input.materialDecision);
     if (materialDecision && !['chapter-draft', 'review-chapter', 'refine-draft', 'refine-from-review'].includes(input.operation))
         fail('GENERATION_MATERIAL_DECISION_INVALID');
@@ -617,7 +622,10 @@ export function rebuildGenerationSourceBinding(deps: GenerationSourceBindingDepe
     };
     if (manifest.version !== 1)
         fail('GENERATION_SOURCE_MANIFEST_INVALID');
-    return buildGenerationSourceBinding(deps, { ...manifest, projectId: previous.projectId, epoch: nextEpoch, modelReceipt: modelReceipt ?? manifest.modelReceipt, policy: policy ?? manifest.policy, outputContract: outputContract ?? manifest.outputContract });
+    const receipt = modelReceipt ?? manifest.modelReceipt;
+    const modelUnchanged = receipt.modelName === manifest.modelReceipt?.modelName;
+    return buildGenerationSourceBinding(deps, { ...manifest, projectId: previous.projectId, epoch: nextEpoch, modelReceipt: receipt, policy: policy ?? manifest.policy, outputContract: outputContract ?? manifest.outputContract },
+        modelUnchanged);
 }
 export function compareGenerationSourceBindings(previous: RunBinding, next: RunBinding): boolean {
     return previous.projectId === next.projectId && isDeepStrictEqual(previous.fingerprint, next.fingerprint) && previous.contextSnapshotId === next.contextSnapshotId && isDeepStrictEqual(previous.sourceManifest, next.sourceManifest)
