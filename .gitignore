@@ -43,6 +43,10 @@ tailwind.config.js.bak
 .release-gate*.txt
 /.vitest-attachments/
 
+# 原生安全文件系统 helper 编译产物（由 pnpm dev / pnpm build 生成）
+/electron/security/darwin-safe-file-system
+/electron/security/linux-safe-file-system
+
 # 本地工具索引与会话
 .codegraph/
 .superpowers/

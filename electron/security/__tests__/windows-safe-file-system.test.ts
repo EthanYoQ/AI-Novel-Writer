@@ -699,3 +699,175 @@ describe.runIf(process.platform === 'darwin')('Darwin handle-bound secure file s
     expect(fs.readFileSync(targetPath, 'utf8')).toBe('attacker content')
   }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
 })
+
+function buildLinuxHelper(fixture: string): string {
+  const output = path.join(fixture, 'linux-safe-file-system')
+  const source = path.resolve('electron/security/linux-safe-file-system.c')
+  const result = spawnSync(process.env.CC || 'cc', [
+    '-O2',
+    '-std=gnu11',
+    '-Wall',
+    '-Werror',
+    source,
+    '-o', output,
+  ], {
+    encoding: 'utf8',
+  })
+  expect(result.status, result.stderr).toBe(0)
+  return output
+}
+
+describe('platform-scoped capability bounds', () => {
+  it('rejects a backslash inside a POSIX file name instead of reading it as a separator', () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    fs.mkdirSync(selectedRoot)
+    const requested = path.join(selectedRoot, 'a\\b.md')
+
+    // POSIX allows a backslash in a real file name. The capability wire format
+    // joins segments with backslashes, so honouring it would resolve `a\b` to
+    // `a/b` and touch a different file.
+    expect(() => createSecureFileCapability(selectedRoot, requested, 'linux'))
+      .toThrow('SECURE_FS_INVALID_PATH')
+    expect(() => createSecureFileCapability(selectedRoot, requested, 'darwin'))
+      .toThrow('SECURE_FS_INVALID_PATH')
+    // Windows already treats a backslash as a separator, so the path stays valid.
+    expect(() => createSecureFileCapability(selectedRoot, requested, 'win32')).not.toThrow()
+  })
+
+  it('accepts a Linux device id above 32 bits and still bounds Windows identities', async () => {
+    const oversized: SecureFileCapability = {
+      rootPath: path.resolve('/tmp/secure-fs-probe'),
+      relativePath: 'chapter.txt',
+      rootIdentity: { volumeSerialNumber: '4294967296', fileIndex: '1' },
+    }
+    const invocations: string[] = []
+    const invoke = async () => {
+      invocations.push('read')
+      return { ok: true, contentBase64: '' }
+    }
+
+    await expect(createWindowsSafeFileSystem({ platform: 'linux', invoke }).readText(oversized))
+      .resolves.toBe('')
+    expect(invocations).toEqual(['read'])
+
+    await expect(createWindowsSafeFileSystem({ platform: 'win32', invoke }).readText(oversized))
+      .rejects.toThrow('SECURE_FS_INVALID_PATH')
+    expect(invocations).toEqual(['read'])
+  })
+})
+
+describe.runIf(process.platform === 'linux')('Linux handle-bound secure file system', () => {
+  it('reads, lists, creates, and atomically writes inside the selected root', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    fs.mkdirSync(path.join(selectedRoot, 'chapters'), { recursive: true })
+    fs.writeFileSync(path.join(selectedRoot, 'chapters', 'one.md'), '第一段\n', 'utf8')
+    const safeFileSystem = createWindowsSafeFileSystem({
+      platform: 'linux',
+      helperPath: buildLinuxHelper(fixture),
+    })
+
+    await expect(safeFileSystem.readText(capability(selectedRoot, 'chapters/one.md')))
+      .resolves.toBe('第一段\n')
+    await expect(safeFileSystem.listDirectory(capability(selectedRoot, 'chapters')))
+      .resolves.toEqual([{ name: 'one.md', isDirectory: false }])
+    await safeFileSystem.mkdir(capability(selectedRoot, 'chapters/deep/nested'))
+    expect(fs.statSync(path.join(selectedRoot, 'chapters/deep/nested')).isDirectory()).toBe(true)
+    await safeFileSystem.writeTextAtomically(
+      capability(selectedRoot, 'chapters/two.md'),
+      '新内容',
+      undefined,
+      { mustAlreadyExist: false },
+    )
+    expect(fs.readFileSync(path.join(selectedRoot, 'chapters', 'two.md'), 'utf8')).toBe('新内容')
+  }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
+
+  it('keeps a four-byte UTF-8 file name and content intact', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    fs.mkdirSync(selectedRoot)
+    const safeFileSystem = createWindowsSafeFileSystem({
+      platform: 'linux',
+      helperPath: buildLinuxHelper(fixture),
+    })
+    const emojiName = '\u{1F600}.md'
+
+    await safeFileSystem.writeTextAtomically(capability(selectedRoot, emojiName), '表情 \u{1F600}')
+    expect(fs.readFileSync(path.join(selectedRoot, emojiName), 'utf8')).toBe('表情 \u{1F600}')
+    await expect(safeFileSystem.readText(capability(selectedRoot, emojiName)))
+      .resolves.toBe('表情 \u{1F600}')
+  }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
+
+  it('rejects symlink escapes for reads, mkdir, and atomic writes', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    const outsideRoot = path.join(fixture, 'outside')
+    fs.mkdirSync(path.join(selectedRoot, 'guarded'), { recursive: true })
+    fs.mkdirSync(outsideRoot)
+    fs.writeFileSync(path.join(selectedRoot, 'guarded', 'secret.txt'), 'inside', 'utf8')
+    fs.writeFileSync(path.join(outsideRoot, 'secret.txt'), 'outside', 'utf8')
+    const safeFileSystem = createWindowsSafeFileSystem({
+      platform: 'linux',
+      helperPath: buildLinuxHelper(fixture),
+    })
+
+    replaceWithOutsideJunction(selectedRoot, outsideRoot)
+
+    await expect(safeFileSystem.readText(capability(selectedRoot, 'guarded/secret.txt')))
+      .rejects.toThrow('SECURE_FS_REPARSE_POINT')
+    await expect(safeFileSystem.mkdir(capability(selectedRoot, 'guarded/new-folder')))
+      .rejects.toThrow('SECURE_FS_REPARSE_POINT')
+    await expect(safeFileSystem.writeTextAtomically(
+      capability(selectedRoot, 'guarded/result.txt'),
+      'must stay inside',
+    )).rejects.toThrow('SECURE_FS_REPARSE_POINT')
+    expect(fs.existsSync(path.join(outsideRoot, 'new-folder'))).toBe(false)
+    expect(fs.readFileSync(path.join(outsideRoot, 'secret.txt'), 'utf8')).toBe('outside')
+  }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
+
+  it('rejects read, list, and write after the selected root is replaced', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    const movedRoot = path.join(fixture, 'moved-selected')
+    fs.mkdirSync(selectedRoot)
+    fs.writeFileSync(path.join(selectedRoot, 'chapter.txt'), 'original', 'utf8')
+    const readCapability = capability(selectedRoot, 'chapter.txt')
+    const listCapability = capability(selectedRoot, '')
+    fs.renameSync(selectedRoot, movedRoot)
+    fs.mkdirSync(selectedRoot)
+    fs.writeFileSync(path.join(selectedRoot, 'chapter.txt'), 'replacement', 'utf8')
+    const safeFileSystem = createWindowsSafeFileSystem({
+      platform: 'linux',
+      helperPath: buildLinuxHelper(fixture),
+    })
+
+    await expect(safeFileSystem.readText(readCapability))
+      .rejects.toThrow('SECURE_FS_ROOT_CHANGED')
+    await expect(safeFileSystem.listDirectory(listCapability))
+      .rejects.toThrow('SECURE_FS_ROOT_CHANGED')
+    await expect(safeFileSystem.writeTextAtomically(readCapability, 'attacker write'))
+      .rejects.toThrow('SECURE_FS_ROOT_CHANGED')
+    expect(fs.readFileSync(path.join(selectedRoot, 'chapter.txt'), 'utf8')).toBe('replacement')
+  }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
+
+  it('honours mustAlreadyExist through the commit guard', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    const targetPath = path.join(selectedRoot, 'chapter.txt')
+    fs.mkdirSync(selectedRoot)
+    fs.writeFileSync(targetPath, 'old content', 'utf8')
+    const safeFileSystem = createWindowsSafeFileSystem({
+      platform: 'linux',
+      helperPath: buildLinuxHelper(fixture),
+    })
+
+    await expect(safeFileSystem.writeTextAtomically(
+      capability(selectedRoot, 'chapter.txt'),
+      'new content',
+      () => fs.rmSync(targetPath),
+      { mustAlreadyExist: true },
+    )).rejects.toThrow('SECURE_FS_WRITE_FAILED')
+    expect(fs.existsSync(targetPath)).toBe(false)
+  }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
+})

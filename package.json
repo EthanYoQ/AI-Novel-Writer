@@ -10,16 +10,19 @@
     "node": ">=22.14.0"
   },
   "main": "dist-electron/main.js",
+  "desktopName": "ai-novel-writer.desktop",
   "scripts": {
     "postinstall": "node node_modules/electron/install.js",
-    "dev": "vite",
+    "dev": "node scripts/build-linux-helper.mjs && vite",
     "clean:build": "node scripts/clean-build-output.mjs",
     "typecheck": "tsc --noEmit",
     "check:i18n": "node scripts/check-i18n-coverage.mjs",
     "test": "vitest run",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "verify:drive": "node scripts/redesign/drive.mjs",
-    "build": "tsc && vite build",
+    "build:linux:helper": "node scripts/build-linux-helper.mjs",
+    "build:linux:artifacts": "pnpm run clean:build && node scripts/build-linux-helper.mjs && pnpm run typecheck && vite build && electron-builder --linux --x64 --publish never",
+    "build": "node scripts/build-linux-helper.mjs && tsc && vite build",
     "build:win": "pnpm run release:win:verify",
     "build:win:artifacts": "node scripts/require-release-gate.mjs && tsc && vite build && electron-builder --win --x64 --publish never",
     "release:win:verify": "node scripts/release-win-verify.mjs",
@@ -115,6 +118,7 @@
   "optionalDependencies": {
     "@lancedb/lancedb-darwin-arm64": "0.22.3",
     "@lancedb/lancedb-darwin-x64": "0.22.3",
+    "@lancedb/lancedb-linux-x64-gnu": "0.22.3",
     "@lancedb/lancedb-win32-x64-msvc": "0.22.3"
   }
 }

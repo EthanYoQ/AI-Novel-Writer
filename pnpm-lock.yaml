@@ -237,6 +237,9 @@ importers:
       '@lancedb/lancedb-darwin-x64':
         specifier: 0.22.3
         version: 0.22.3
+      '@lancedb/lancedb-linux-x64-gnu':
+        specifier: 0.22.3
+        version: 0.22.3
       '@lancedb/lancedb-win32-x64-msvc':
         specifier: 0.22.3
         version: 0.22.3
